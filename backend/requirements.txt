@@ -106,3 +106,4 @@ xlrd==2.0.2
 xlsxwriter==3.2.9
 asyncpg
 psycopg2-binary
+keybert==0.8.1

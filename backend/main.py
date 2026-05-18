@@ -13,7 +13,7 @@ import csv
 import sqlalchemy as sa
 
 from ats_processor import ATSProcessor
-from database.connection import get_db
+from database.connection import get_db, engine, Base
 from database.crud import create_candidate, update_decision
 from database.models import Candidate, Settings
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,14 +27,13 @@ from r2_storage import upload_pdf, get_pdf_url
 
 print("MAIN.PY  IS RUNNING")
 
-from database.connection import engine, Base
+app = FastAPI(title="ATS Resume Analyser")
 
 @app.on_event("startup")
 async def startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-app = FastAPI(title="ATS Resume Analyzer")
 
 
 app.add_middleware(

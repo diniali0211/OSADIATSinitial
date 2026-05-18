@@ -1,46 +1,37 @@
-import { candidateStore } from '../store/candidateStore';
 import React, { useState, useEffect } from 'react';
 import {
   Users,
   FileText,
   Calendar,
   Download,
-  Eye
+  Eye,
+  X
 } from 'lucide-react';
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  ResponsiveContainer,
   LineChart,
   Line,
+  XAxis,
+  YAxis,
   AreaChart,
   Area,
   RadarChart,
   PolarGrid,
   PolarAngleAxis,
   PolarRadiusAxis,
-  Radar
+  Radar,
+  ResponsiveContainer,
 } from 'recharts';
 import { atsApi } from '../services/atsApi';
 
 export function Analytics() {
-  const stats = candidateStore.getStats();
-  const candidates = candidateStore.getAll();
-
   const [dateRange, setDateRange] = useState('30d');
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedList, setSelectedList] =
-    useState<'rejected' | 'kiv' | null>(null);
+  const [allCandidates, setAllCandidates] = useState<any[]>([]);
+  const [selectedList, setSelectedList] = useState<'REJECTED' | 'KIV' | 'APPROVED' | 'PENDING' | null>(null);
 
   const [analyticsData, setAnalyticsData] = useState({
-    overview: {},
-    skillTrends: [],
     scoreTrends: [],
     applicationVolume: [],
-    topSkills: [],
     performanceMetrics: []
   });
 
@@ -59,16 +50,11 @@ export function Analytics() {
     try {
       setIsLoading(true);
       const resumes = await atsApi.getAllResumes();
-      const completed = resumes.filter(
-        r => r.status === 'completed' && r.analysis
-      );
+      setAllCandidates(resumes);
 
       setAnalyticsData({
-        overview: {},
-        skillTrends: [],
         scoreTrends: generateScoreTrends(),
         applicationVolume: generateApplicationVolume(),
-        topSkills: [],
         performanceMetrics: generatePerformanceMetrics()
       });
     } finally {
@@ -96,6 +82,39 @@ export function Analytics() {
         current: 70 + Math.random() * 25,
         benchmark: 75 + Math.random() * 15
       }));
+
+  // Stats from real backend data
+  const stats = {
+    total: allCandidates.length,
+    approved: allCandidates.filter(c => c.status === 'APPROVED').length,
+    rejected: allCandidates.filter(c => c.status === 'REJECTED').length,
+    kiv: allCandidates.filter(c => c.status === 'KIV').length,
+    pending: allCandidates.filter(c => c.status === 'PENDING').length,
+  };
+
+  const getListCandidates = () => {
+    if (!selectedList) return [];
+    return allCandidates.filter(c => c.status === selectedList);
+  };
+
+  const getListTitle = () => {
+    switch (selectedList) {
+      case 'APPROVED': return 'Approved Candidates';
+      case 'REJECTED': return 'Rejected Candidates';
+      case 'KIV': return 'Candidates in KIV';
+      case 'PENDING': return 'Pending Candidates';
+      default: return '';
+    }
+  };
+
+  const REJECT_REASON_LABELS: Record<string, string> = {
+    INCOMPLETE: 'Incomplete Application',
+    LOW_SKILL: 'Low Skill Level',
+    INSTRUCTIONS: 'Did Not Follow Instructions',
+    LEVEL_MISMATCH: 'Level Mismatch',
+    CULTURE: 'Culture Fit',
+    VETTING: 'Failed Vetting',
+  };
 
   if (isLoading) {
     return (
@@ -139,21 +158,29 @@ export function Analytics() {
       {/* OVERVIEW CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
-        <div className="rounded-2xl p-6" style={glassStyle}>
+        <div
+          onClick={() => setSelectedList(selectedList === 'PENDING' ? null : 'PENDING')}
+          className="rounded-2xl p-6 cursor-pointer hover:scale-105 transition-transform"
+          style={glassStyle}
+        >
           <FileText className="mb-3" />
           <h3 className="text-2xl">{stats.total}</h3>
           <p className="text-sm">Total Applications</p>
         </div>
 
-        <div className="rounded-2xl p-6" style={glassStyle}>
+        <div
+          onClick={() => setSelectedList(selectedList === 'APPROVED' ? null : 'APPROVED')}
+          className="rounded-2xl p-6 cursor-pointer hover:scale-105 transition-transform"
+          style={glassStyle}
+        >
           <Users className="mb-3 text-green-600" />
           <h3 className="text-2xl text-green-600">{stats.approved}</h3>
           <p className="text-sm">Approved Candidates</p>
         </div>
 
         <div
-          onClick={() => setSelectedList('rejected')}
-          className="rounded-2xl p-6 cursor-pointer"
+          onClick={() => setSelectedList(selectedList === 'REJECTED' ? null : 'REJECTED')}
+          className="rounded-2xl p-6 cursor-pointer hover:scale-105 transition-transform"
           style={glassStyle}
         >
           <Eye className="mb-3 text-red-600" />
@@ -162,8 +189,8 @@ export function Analytics() {
         </div>
 
         <div
-          onClick={() => setSelectedList('kiv')}
-          className="rounded-2xl p-6 cursor-pointer"
+          onClick={() => setSelectedList(selectedList === 'KIV' ? null : 'KIV')}
+          className="rounded-2xl p-6 cursor-pointer hover:scale-105 transition-transform"
           style={glassStyle}
         >
           <Calendar className="mb-3 text-yellow-600" />
@@ -173,44 +200,50 @@ export function Analytics() {
 
       </div>
 
-      {/* ✅ STEP 6.4 — LIST RENDER (CORRECT LOCATION) */}
+      {/* CANDIDATE LIST PANEL */}
       {selectedList && (
         <div className="rounded-2xl p-6" style={glassStyle}>
-          <h3 className="text-xl font-semibold mb-4 capitalize">
-            {selectedList === 'rejected'
-              ? 'Rejected Candidates'
-              : 'Candidates in KIV'}
-          </h3>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-xl font-semibold">{getListTitle()}</h3>
+            <button
+              onClick={() => setSelectedList(null)}
+              className="text-gray-500 hover:text-gray-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
 
-          {candidates
-            .filter(c => c.decision === selectedList)
-            .map(c => (
-              <div
-                key={c.id}
-                className="border rounded-lg p-4 mb-3 bg-white/40"
-              >
-                <p className="font-medium">{c.fileName}</p>
-
-                {c.decisionReason && (
-                  <p className="text-sm text-gray-600 mt-1">
-                    <span className="font-semibold">Reason:</span>{' '}
-                    {c.decisionReason}
-                  </p>
-                )}
-
-                <p className="text-xs text-gray-500 mt-1">
-                  Decided at:{' '}
-                  {c.decidedAt
-                    ? new Date(c.decidedAt).toLocaleString()
-                    : '-'}
-                </p>
-              </div>
-            ))}
-
-          {candidates.filter(c => c.decision === selectedList).length === 0 && (
-            <p className="text-gray-500 text-sm">
-              No candidates in this category.
-            </p>
+          {getListCandidates().length === 0 ? (
+            <p className="text-gray-500 text-sm">No candidates in this category.</p>
+          ) : (
+            <div className="space-y-3">
+              {getListCandidates().map((c: any) => (
+                <div
+                  key={c.id}
+                  className="rounded-xl p-4 bg-white/60 flex justify-between items-center"
+                >
+                  <div>
+                    <p className="font-medium text-gray-800">{c.name || 'Unknown'}</p>
+                    <p className="text-sm text-gray-500">{c.email || '-'} · {c.phone || '-'}</p>
+                    <p className="text-sm text-gray-500">{c.location || '-'}</p>
+                    {/* Show reject reason only for rejected */}
+                    {selectedList === 'REJECTED' && c.reject_reason && (
+                      <p className="text-sm text-red-600 mt-1 font-medium">
+                        Reason: {REJECT_REASON_LABELS[c.reject_reason] || c.reject_reason}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-400 mt-1">
+                      {c.created_at ? new Date(c.created_at).toLocaleDateString() : '-'}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <span className="px-3 py-1 rounded-full text-xs bg-purple-100 text-purple-700">
+                      Score: {c.score || 0}%
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

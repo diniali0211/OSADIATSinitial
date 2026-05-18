@@ -4,9 +4,6 @@ import {
   Upload,
   AlertCircle,
   FileSearch,
-  CheckCircle,
-  XCircle,
-  Clock,
 } from 'lucide-react';
 import { atsApi } from '../services/atsApi';
 
@@ -18,13 +15,34 @@ type Decision =
   | 'hired';
 
 const REJECT_REASONS = [
-  'Resume not complete – Missing details like experience or contact info',
-  'Not enough skills – Does not match job requirements',
-  'Did not follow instructions – Forgot to attach documents or missed deadline',
-  'Overqualified or underqualified – Job level does not fit the candidate',
-  'Not a good fit for company – Work style or attitude does not match company culture',
-  'Fail vetting',
+  { code: 'INCOMPLETE', label: 'Resume not complete – Missing details like experience or contact info' },
+  { code: 'LOW_SKILL', label: 'Not enough skills – Does not match job requirements' },
+  { code: 'INSTRUCTIONS', label: 'Did not follow instructions – Forgot to attach documents or missed deadline' },
+  { code: 'LEVEL_MISMATCH', label: 'Overqualified or underqualified – Job level does not fit the candidate' },
+  { code: 'CULTURE', label: 'Not a good fit for company – Work style or attitude does not match company culture' },
+  { code: 'VETTING', label: 'Fail vetting' },
 ];
+
+const RECRUITERS = [
+  "Kayryinna B",
+  "Jusnie R",
+  "Masmera",
+  "Ilham",
+  "Liyana",
+  "Armi",
+  "Zawani",
+];
+
+const getStatusStyle = (decision: string) => {
+  switch (decision) {
+    case 'pending': return { background: '#374151', color: 'white', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 'bold' };
+    case 'approved': return { background: '#dcfce7', color: '#15803d', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 'bold' };
+    case 'rejected': return { background: '#fee2e2', color: '#dc2626', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 'bold' };
+    case 'kiv': return { background: '#fef9c3', color: '#854d0e', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 'bold' };
+    case 'hired': return { background: '#dbeafe', color: '#1d4ed8', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 'bold' };
+    default: return { background: '#f3f4f6', color: '#374151', padding: '4px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 'bold' };
+  }
+};
 
 export function ResumeAnalyzer() {
   const [uploadedFiles, setUploadedFiles] = useState<File[]>([]);
@@ -40,32 +58,38 @@ export function ResumeAnalyzer() {
 
   const [selectedReasons, setSelectedReasons] = useState<string[]>([]);
 
+  const [recruiterModal, setRecruiterModal] = useState<{
+    open: boolean;
+    candidateId: string | null;
+  }>({ open: false, candidateId: null });
+
+  const [selectedRecruiter, setSelectedRecruiter] = useState('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ---------------- Upload & Analysis ---------------- */
-
   const handleFiles = async (files: File[]) => {
     setUploadedFiles(prev => [...prev, ...files]);
     setIsAnalyzing(true);
 
     try {
       for (const file of files) {
-        const analysis = await atsApi.analyzeResume(file);
+        const { resumeId, analysis } = await atsApi.uploadResume(file);
 
         const candidate = {
-            id: crypto.randomUUID(),
-            fileName: file.name,
-            uploadedAt: new Date().toISOString(),
-            analysis: analysis ?? {},
-            decision: 'pending',
-            decidedAt: null,
-            decisionReason: undefined,
-          };
-
+          id: resumeId,
+          fileName: file.name,
+          uploadedAt: new Date().toISOString(),
+          analysis: analysis ?? {},
+          decision: 'pending',
+          decidedAt: null,
+          decisionReason: undefined,
+        };
 
         candidateStore.addCandidate(candidate);
         setAnalysisResults(prev => [...prev, candidate]);
       }
+
     } catch (err) {
       console.error(err);
       setError('Analysis failed. Please try again.');
@@ -75,49 +99,69 @@ export function ResumeAnalyzer() {
   };
 
   /* ---------------- Decisions ---------------- */
-
-  const applyDecision = (
+  const applyDecision = async (
     id: string,
     decision: Decision,
-    reason?: string
+    reason?: string,
+    recruiter?: string,
   ) => {
-    candidateStore.setDecision(id, decision, reason);
+    console.log("Sending candidate_id:", id);
+    try {
+      await atsApi.setDecision(id, decision.toUpperCase(), reason, recruiter);
+      candidateStore.setDecision(id, decision, reason);
 
-    setAnalysisResults(prev =>
-      prev.map(c =>
-        c.id === id
-          ? {
-              ...c,
-              decision,
-              decisionReason: reason,
-              decidedAt: new Date().toISOString(),
-            }
-          : c
-      )
-    );
+      setAnalysisResults(prev =>
+        prev.map(c =>
+          c.id === id
+            ? {
+                ...c,
+                decision,
+                decisionReason: reason,
+                decidedAt: new Date().toISOString(),
+              }
+            : c
+        )
+      );
+
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update decision");
+    }
   };
 
   const confirmReject = () => {
     if (!decisionModal.candidateId) return;
+    if (selectedReasons.length === 0) return;
 
     applyDecision(
       decisionModal.candidateId,
       'rejected',
-      selectedReasons.join(', ')
+      selectedReasons[0],
     );
 
     setDecisionModal({ open: false, candidateId: null, decision: null });
     setSelectedReasons([]);
   };
 
-  /* ---------------- UI ---------------- */
+  const confirmHire = async () => {
+    if (!recruiterModal.candidateId || !selectedRecruiter) return;
+    await applyDecision(
+      recruiterModal.candidateId,
+      'hired',
+      undefined,
+      selectedRecruiter,
+    );
+    setRecruiterModal({ open: false, candidateId: null });
+    setSelectedRecruiter('');
+  };
 
+  /* ---------------- UI ---------------- */
   return (
     <div className="space-y-6">
 
-      {/* Upload */}
+      {/* Upload Area */}
       <div
-        className="rounded-2xl p-8 text-center cursor-pointer border-2 border-dashed"
+        style={{ border: '2px dashed #a855f7', borderRadius: '16px', padding: '32px', textAlign: 'center', cursor: 'pointer' }}
         onClick={() => fileInputRef.current?.click()}
       >
         <input
@@ -130,13 +174,23 @@ export function ResumeAnalyzer() {
             e.target.files && handleFiles(Array.from(e.target.files))
           }
         />
-        <Upload className="mx-auto mb-2" />
-        <p>Click to upload resumes</p>
+        <Upload style={{ margin: '0 auto 8px', color: '#a855f7', width: '32px', height: '32px' }} />
+        <p style={{ color: '#4b5563', fontWeight: '500' }}>Click to upload resumes</p>
+        <p style={{ color: '#9ca3af', fontSize: '12px', marginTop: '4px' }}>PDF, DOC, DOCX supported</p>
       </div>
 
+      {/* Analyzing indicator */}
+      {isAnalyzing && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', padding: '16px' }}>
+          <div className="w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+          <p style={{ color: '#9333ea', fontWeight: '500' }}>Analyzing resume...</p>
+        </div>
+      )}
+
+      {/* Error */}
       {error && (
-        <div className="flex items-center gap-2 text-red-600">
-          <AlertCircle />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#dc2626', background: '#fef2f2', padding: '12px', borderRadius: '8px' }}>
+          <AlertCircle style={{ width: '16px', height: '16px' }} />
           {error}
         </div>
       )}
@@ -148,51 +202,67 @@ export function ResumeAnalyzer() {
         const skills = analysis.skills ?? [];
         const experience = analysis.experience ?? {};
         const positions = experience.positions ?? [];
-        const jobMatch = analysis.jobMatch ?? {};
 
         return (
           <div
             key={result.id}
-            className="border rounded-xl p-6 space-y-6 bg-white/40 backdrop-blur"
+            style={{ border: '1px solid #e5e7eb', borderRadius: '12px', padding: '24px', background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(8px)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
           >
+
             {/* Header */}
-            <div className="flex justify-between items-start">
-              <h3 className="font-semibold">{result.fileName}</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '24px' }}>
+              <h3 style={{ fontWeight: '600', color: '#1f2937' }}>{result.fileName}</h3>
 
-              <div className="flex gap-2">
-                <StatusBadge status={result.decision} />
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
 
+                {/* Status Badge */}
+                <span style={getStatusStyle(result.decision)}>
+                  {result.decision.toUpperCase()}
+                </span>
+
+                {/* Approve Button */}
                 <button
-                  onClick={() => applyDecision(result.id, 'approved')}
-                  className="px-3 py-1 bg-green-100 text-green-700 rounded"
+                  onClick={() => applyDecision(String(result.id), 'approved')}
+                  style={{ background: '#22c55e', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
                 >
-                  Approve
+                  ✓ Approve
                 </button>
 
+                {/* Reject Button */}
                 <button
                   onClick={() =>
                     setDecisionModal({
                       open: true,
-                      candidateId: result.id,
+                      candidateId: String(result.id),
                       decision: 'rejected',
                     })
                   }
-                  className="px-3 py-1 bg-red-100 text-red-700 rounded"
+                  style={{ background: '#ef4444', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
                 >
-                  Reject
+                  ✗ Reject
                 </button>
 
+                {/* KIV Button */}
                 <button
-                  onClick={() => applyDecision(result.id, 'kiv')}
-                  className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded"
+                  onClick={() => applyDecision(String(result.id), 'kiv')}
+                  style={{ background: '#eab308', color: '#1a1a1a', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
                 >
-                  KIV
+                  ⏸ KIV
                 </button>
+
+                {/* Hire Button */}
+                <button
+                  onClick={() => setRecruiterModal({ open: true, candidateId: String(result.id) })}
+                  style={{ background: '#2563eb', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
+                >
+                  ★ Hire
+                </button>
+
               </div>
             </div>
 
             {/* Personal Info */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', marginBottom: '24px' }}>
               <Info label="Name" value={personal.name} />
               <Info label="Email" value={personal.email} />
               <Info label="Phone" value={personal.phone} />
@@ -201,13 +271,13 @@ export function ResumeAnalyzer() {
 
             {/* Skills */}
             {skills.length > 0 && (
-              <div>
-                <h4 className="font-semibold mb-2">Skills</h4>
-                <div className="flex flex-wrap gap-2">
+              <div style={{ marginBottom: '24px' }}>
+                <h4 style={{ fontWeight: '600', marginBottom: '8px' }}>Skills</h4>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                   {skills.map((s: any, i: number) => (
                     <span
                       key={i}
-                      className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-sm"
+                      style={{ padding: '4px 12px', background: '#f3e8ff', color: '#7e22ce', borderRadius: '999px', fontSize: '14px' }}
                     >
                       {s.name ?? s}
                     </span>
@@ -217,109 +287,164 @@ export function ResumeAnalyzer() {
             )}
 
             {/* Experience */}
-          {positions.length > 0 && (
-            <div>
-              <h4 className="font-semibold mb-2">
-                Work Experience ({experience.totalYears ?? 0} yrs)
-              </h4>
+            {positions.length > 0 && (
+              <div style={{ marginBottom: '24px' }}>
+                <h4 style={{ fontWeight: '600', marginBottom: '8px' }}>
+                  Work Experience ({experience.totalYears ?? 0} yrs)
+                </h4>
+                {positions.map((pos: any, i: number) => (
+                  <div
+                    key={i}
+                    style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px', marginBottom: '12px', background: 'rgba(255,255,255,0.4)' }}
+                  >
+                    <p style={{ fontWeight: '500' }}>{pos.title}</p>
+                    <p style={{ fontSize: '14px', color: '#4b5563' }}>{pos.company}</p>
+                    {pos.duration && (
+                      <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>{pos.duration}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
-              {positions.map((pos: any, i: number) => (
-                <div
-                  key={i}
-                  className="border rounded-lg p-4 mb-3 bg-white/40"
-                >
-                  {/* Job title */}
-                  <p className="font-medium line-clamp-2">
-                    {pos.title}
-                  </p>
-
-                  {/* Company */}
-                  <p className="text-sm text-gray-600 line-clamp-2">
-                    {pos.company}
-                  </p>
-
-                  {/* Duration */}
-                  {pos.duration && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      {pos.duration}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-          
-            {/* Job Match */}
-            <div className="bg-purple-50 p-4 rounded">
-              <p className="font-semibold">
-                Match: {jobMatch.matchPercentage ?? 0}%
+            {/* Overall Score */}
+            <div style={{ background: '#faf5ff', padding: '16px', borderRadius: '8px', display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <p style={{ fontWeight: '600', color: '#7e22ce', whiteSpace: 'nowrap' }}>
+                Overall Score: {analysis.overallScore ?? 0}%
               </p>
+              <div style={{ flex: 1, background: '#e9d5ff', borderRadius: '999px', height: '10px' }}>
+                <div
+                  style={{
+                    width: `${analysis.overallScore ?? 0}%`,
+                    background: '#7c3aed',
+                    height: '10px',
+                    borderRadius: '999px',
+                    transition: 'width 0.3s ease'
+                  }}
+                />
+              </div>
             </div>
+
           </div>
         );
       })}
 
+      {/* Recruiter Modal */}
+      {recruiterModal.open && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '16px' }}>
+          <div style={{ background: 'white', borderRadius: '12px', padding: '24px', width: '100%', maxWidth: '400px', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
+
+            <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#2563eb', marginBottom: '8px' }}>
+              Select Recruiter
+            </h3>
+            <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '16px' }}>
+              Who is hiring this candidate?
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+              {RECRUITERS.map(recruiter => (
+                <button
+                  key={recruiter}
+                  onClick={() => setSelectedRecruiter(recruiter)}
+                  style={{
+                    padding: '10px 16px',
+                    borderRadius: '8px',
+                    border: selectedRecruiter === recruiter ? '2px solid #2563eb' : '1px solid #d1d5db',
+                    background: selectedRecruiter === recruiter ? '#eff6ff' : 'white',
+                    color: selectedRecruiter === recruiter ? '#2563eb' : '#374151',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    fontSize: '14px',
+                    fontWeight: selectedRecruiter === recruiter ? '600' : '400',
+                  }}
+                >
+                  {recruiter}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button
+                onClick={() => {
+                  setRecruiterModal({ open: false, candidateId: null });
+                  setSelectedRecruiter('');
+                }}
+                style={{ padding: '8px 16px', borderRadius: '8px', background: '#f3f4f6', color: '#374151', fontSize: '14px', border: 'none', cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmHire}
+                disabled={!selectedRecruiter}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  background: selectedRecruiter ? '#2563eb' : '#93c5fd',
+                  color: 'white',
+                  fontSize: '14px',
+                  border: 'none',
+                  cursor: selectedRecruiter ? 'pointer' : 'not-allowed'
+                }}
+              >
+                Confirm Hire
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
       {/* Reject Modal */}
       {decisionModal.open && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '16px' }}>
+          <div style={{ background: 'white', borderRadius: '12px', padding: '24px', width: '100%', maxWidth: '480px', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
 
-          <div className="bg-white shadow-2xl border border-gray-300 rounded-xl p-6 w-full max-w-md space-y-4">
+            <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#dc2626', marginBottom: '16px' }}>Reject Candidate</h3>
 
-            <h3 className="text-lg font-semibold">
-              Reject Candidate
-            </h3>
-
-            <div className="space-y-3 max-h-64 overflow-y-auto">
-
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '256px', overflowY: 'auto', marginBottom: '16px' }}>
               {REJECT_REASONS.map(reason => {
-                const checked = selectedReasons.includes(reason);
-
+                const checked = selectedReasons.includes(reason.code);
                 return (
                   <label
-                    key={reason}
-                    className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition
-                      ${
-                        checked
-                          ? 'border-red-400 bg-red-50'
-                          : 'hover:bg-gray-100 border-gray-300 bg-white'
-                      }`}
+                    key={reason.code}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '12px',
+                      padding: '12px',
+                      borderRadius: '8px',
+                      border: checked ? '2px solid #f87171' : '1px solid #d1d5db',
+                      background: checked ? '#fef2f2' : 'white',
+                      cursor: 'pointer',
+                    }}
                   >
-
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={() =>
                         setSelectedReasons(prev =>
-                          prev.includes(reason)
-                            ? prev.filter(r => r !== reason)
-                            : [...prev, reason]
+                          prev.includes(reason.code)
+                            ? prev.filter(r => r !== reason.code)
+                            : [...prev, reason.code]
                         )
                       }
-                      className="mt-1 accent-red-600"
+                      style={{ marginTop: '2px', accentColor: '#dc2626' }}
                     />
-
-                    <span className="text-sm leading-snug text-gray-800">
-                      {reason}
+                    <span style={{ fontSize: '14px', color: '#1f2937', lineHeight: '1.4' }}>
+                      {reason.label}
                     </span>
-
                   </label>
                 );
               })}
-
             </div>
 
-            <div className="flex justify-end gap-2 pt-4">
-
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button
                 onClick={() => {
-                  setDecisionModal({
-                    open: false,
-                    candidateId: null,
-                    decision: null,
-                  });
+                  setDecisionModal({ open: false, candidateId: null, decision: null });
                   setSelectedReasons([]);
                 }}
-                className="px-3 py-2 rounded bg-gray-100"
+                style={{ padding: '8px 16px', borderRadius: '8px', background: '#f3f4f6', color: '#374151', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
               >
                 Cancel
               </button>
@@ -327,25 +452,34 @@ export function ResumeAnalyzer() {
               <button
                 onClick={confirmReject}
                 disabled={selectedReasons.length === 0}
-                className="px-3 py-2 rounded bg-red-600 text-white hover:bg-red-700 disabled:opacity-40"
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: '8px',
+                  background: selectedReasons.length > 0 ? '#dc2626' : '#fca5a5',
+                  color: 'white',
+                  fontSize: '14px',
+                  fontWeight: '500',
+                  border: 'none',
+                  cursor: selectedReasons.length > 0 ? 'pointer' : 'not-allowed'
+                }}
               >
-                Confirm
+                Confirm Reject
               </button>
-
             </div>
 
           </div>
         </div>
       )}
 
-
-      {/* Empty */}
+      {/* Empty State */}
       {uploadedFiles.length === 0 && analysisResults.length === 0 && (
-        <div className="text-center text-gray-500 py-10">
-          <FileSearch className="mx-auto mb-2" />
-          No resumes uploaded yet
+        <div style={{ textAlign: 'center', color: '#6b7280', padding: '40px 0' }}>
+          <FileSearch style={{ margin: '0 auto 8px', width: '40px', height: '40px', color: '#a855f7' }} />
+          <p>No resumes uploaded yet</p>
+          <p style={{ fontSize: '12px', marginTop: '4px', color: '#9ca3af' }}>Upload a PDF, DOC or DOCX to get started</p>
         </div>
       )}
+
     </div>
   );
 }
@@ -363,36 +497,10 @@ function Info({
 }) {
   return (
     <div>
-      <p className="text-sm text-gray-500">{label}</p>
-
-      <p
-        className={
-          clamp
-            ? 'line-clamp-2 text-sm break-words'
-            : ''
-        }
-      >
+      <p style={{ fontSize: '14px', color: '#6b7280' }}>{label}</p>
+      <p style={ clamp ? { overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontSize: '14px', wordBreak: 'break-word' } : {} }>
         {value || '-'}
       </p>
     </div>
-  );
-}
-
-
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    approved: 'bg-green-100 text-green-700',
-    rejected: 'bg-red-100 text-red-700',
-    kiv: 'bg-yellow-100 text-yellow-700',
-    pending: 'bg-gray-100 text-gray-700',
-    hired: 'bg-blue-100 text-blue-700',
-  };
-
-  return (
-    <span
-      className={`px-2 py-1 rounded text-xs font-medium ${colors[status]}`}
-    >
-      {status.toUpperCase()}
-    </span>
   );
 }

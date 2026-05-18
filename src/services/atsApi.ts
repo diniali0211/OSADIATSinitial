@@ -1,4 +1,3 @@
-// ATS API Service - TypeScript Implementation
 interface PersonalInfo {
   name: string;
   email: string;
@@ -6,93 +5,15 @@ interface PersonalInfo {
   location: string;
 }
 
-interface Section {
-  name: string;
-  score: number;
-  status: string;
-  found: boolean;
-}
-
-interface Skill {
-  name: string;
-  confidence: number;
-  category: string;
-}
-
-interface Experience {
-  totalYears: number;
-  positions: Array<{
-    title: string;
-    company: string;
-    duration: string;
-    skills: string[];
-  }>;
-}
-
-interface Education {
-  degree: string;
-  institution: string;
-  year: string;
-}
-
-interface JobMatch {
-  title: string;
-  matchPercentage: number;
-  missingSkills: string[];
-  strengths: string[];
-  recommendations: string[];
-}
-
-interface Keywords {
-  found: string[];
-  missing: string[];
-  density: number;
-}
-
-interface Formatting {
-  score: number;
-  issues: string[];
-}
-
 interface Analysis {
   overallScore: number;
   personalInfo: PersonalInfo;
-  sections: Section[];
-  skills: Skill[];
-  experience: Experience;
-  education: Education[];
-  jobMatch: JobMatch;
-  keywords: Keywords;
-  formatting: Formatting;
-  analysisDate: string;
-  textLength: number;
-}
-
-interface Resume {
-  id: string;
-  filename: string;
-  uploadDate: string;
-  status: 'completed' | 'processing' | 'failed' | 'queued';
-  analysis?: Analysis;
-}
-
-interface JobProfile {
-  id: string;
-  title: string;
-  requiredSkills: string[];
-  preferredSkills: string[];
-  minimumExperience: number;
-  description: string;
+  [key: string]: any;
 }
 
 interface AnalysisStatus {
   status: 'processing' | 'completed' | 'failed' | 'unknown';
   progress?: number;
-}
-
-interface UploadResponse {
-  jobId: string;
-  resumeId: string;
 }
 
 interface BackendStatus {
@@ -106,99 +27,147 @@ interface ModeInfo {
 }
 
 class ATSApiService {
-  private baseUrl = "http://127.0.0.1:8000";
-  private results = new Map<string, any>();
+  private baseUrl = "https://osadiatsinitial-production.up.railway.app";
 
-  /**
-   * Upload resume and get analysis from FastAPI backend
-   */
-  async analyzeResume(file: File): Promise<Analysis> {
+  async uploadResume(file: File) {
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch(`${this.baseUrl}/analyze`, {
+    const res = await fetch(`${this.baseUrl}/analyze`, {
       method: "POST",
       body: formData,
     });
 
-    if (!response.ok) {
-      throw new Error("Resume analysis failed");
-    }
+    if (!res.ok) throw new Error("Upload failed");
 
-    const result = await response.json();
-
-    // Backend already returns { analysis: {...} }
-    return result.analysis;
+    const result = await res.json();
+    console.log("Upload result:", result);
+    return {
+      resumeId: result.id ?? result.candidate_id,
+      analysis: result.analysis,
+    };
   }
 
-    /**
-   * Dashboard expects this
-   * Backend does not persist resumes yet
-   * 
-   */
+  async getAllResumes(): Promise<any[]> {
+    const res = await fetch(`${this.baseUrl}/candidates`);
+    if (!res.ok) throw new Error("Failed to fetch candidates");
+    const data = await res.json();
+    console.log("Candidates from backend:", data);
+    return data;
+  }
 
+  async getResumeUrl(candidateId: string): Promise<string> {
+    const res = await fetch(`${this.baseUrl}/resume-url/${candidateId}`);
+    if (!res.ok) throw new Error("Failed to get resume URL");
+    const data = await res.json();
+    return data.url;
+  }
 
-  async getJobProfiles() {
-  // Temporary backend-compatible stub
-  return [
-    {
-      id: "default",
-      title: "Software Engineer",
-      requiredSkills: ["python", "javascript", "react", "sql"],
-      preferredSkills: [],
-      minimumExperience: 1,
-      description: "Default job profile"
+  async setDecision(candidateId: string, decision: string, reason?: string, recruiter?: string) {
+    const res = await fetch(`${this.baseUrl}/decision`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        candidate_id: String(candidateId),
+        decision,
+        reason: reason || null,
+        recruiter: recruiter || null,
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.json();
+      console.error("Error detail:", errBody);
+      throw new Error("Failed to update decision");
     }
-  ];
+
+    return res.json();
+  }
+
+  async exportAnalysis(ids: string[], format: string): Promise<Blob> {
+    const res = await fetch(`${this.baseUrl}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, format }),
+    });
+    if (!res.ok) throw new Error("Export failed");
+    return res.blob();
+  }
+
+  async getSettings(): Promise<any> {
+    const res = await fetch(`${this.baseUrl}/settings`);
+    if (!res.ok) throw new Error("Failed to get settings");
+    return res.json();
+  }
+
+  async saveSettings(settings: any): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) throw new Error("Failed to save settings");
+  }
+
+  async login(password: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+  async verifyDeletePassword(password: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${this.baseUrl}/verify-delete-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
-
-  async getAllResumes(): Promise<Resume[]> {
-    return [];
+  async exportCandidatesCSV(): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/export-csv`);
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'candidates_export.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
-  /**
-   * Resume Analyzer expects this
-   */
-      async uploadResume(file: File) {
-    const analysis = await this.analyzeResume(file);
-
-    const resumeId = crypto.randomUUID();
-    const jobId = "sync-job";
-
-    // Store result so UI can fetch it later
-    this.results.set(resumeId, analysis);
-
-    return { jobId, resumeId };
+  async resetSettings(): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/settings/reset`, {
+      method: "POST",
+    });
+    if (!res.ok) throw new Error("Reset failed");
   }
 
-
-
-  /**
-   * Analysis result passthrough
-   */
-      async getAnalysisResult(resumeId: string) {
-    const analysis = this.results.get(resumeId);
-
-    if (!analysis) {
-      throw new Error("Analysis not ready");
-    }
-
-    return analysis;
+  async deleteAllCandidates(): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/candidates/all`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error("Delete failed");
   }
 
-
-
-  /**
-   * Backend runs synchronously
-   */
   async getAnalysisStatus(): Promise<AnalysisStatus> {
     return { status: "completed", progress: 100 };
   }
 
-  /**
-   * Backend availability
-   */
   getBackendStatus(): BackendStatus {
     return {
       available: true,
@@ -206,27 +175,16 @@ class ATSApiService {
     };
   }
 
-  /**
-   * App mode info
-   */
   getModeInfo(): ModeInfo {
     return {
       mode: "backend",
       features: [
         "FastAPI backend",
-        "Real resume parsing",
-        "NLP-based extraction",
+        "Resume parsing",
+        "Decision tracking",
       ],
     };
   }
 }
 
-
-
-
-
-
-
-
-// Export singleton instance
 export const atsApi = new ATSApiService();

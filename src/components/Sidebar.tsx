@@ -1,42 +1,43 @@
 import React from 'react';
-import { 
-  LayoutDashboard, 
-  FileSearch, 
-  Users, 
-  Briefcase, 
-  BarChart3, 
+import {
+  FileSearch,
+  Users,
+  Briefcase,
+  BarChart3,
   Settings,
   BrainCircuit,
-  Info,
-  Zap
+  Zap,
+  LogOut,
 } from 'lucide-react';
 
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  onLogout: () => void;
 }
 
-export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
+export function Sidebar({ activeTab, setActiveTab, onLogout }: SidebarProps) {
   const menuItems = [
-  { id: 'analytics', label: 'Analytics', icon: BarChart3 }, // 👈 first
-  { id: 'analyzer', label: 'Resume Analyzer', icon: FileSearch },
-  { id: 'candidates', label: 'Candidates', icon: Users },
-  { id: 'hired', label: 'Hired', icon: Zap },
-  { id: 'kiv', label: '  Decision Queue', icon: Briefcase },
-  { id: 'settings', label: 'Settings', icon: Settings },
-];
+    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+    { id: 'analyzer', label: 'Resume Analyzer', icon: FileSearch },
+    { id: 'candidates', label: 'Candidates', icon: Users },
+    { id: 'hired', label: 'Hired', icon: Zap },
+    { id: 'kiv', label: 'Decision Queue', icon: Briefcase },
+    { id: 'settings', label: 'Settings', icon: Settings },
+  ];
 
-
-  // Glassmorphism styles using inline styles
   const glassStyle = {
     backdropFilter: 'blur(20px)',
     background: 'rgba(255, 255, 255, 0.15)',
     border: '1px solid rgba(255, 255, 255, 0.3)',
-    boxShadow: '0 12px 40px rgba(31, 38, 135, 0.2)'
+    boxShadow: '0 12px 40px rgba(31, 38, 135, 0.2)',
   };
 
   return (
-    <aside className="w-64 shadow-2xl" style={glassStyle}>
+    <aside
+      className="w-64 shadow-2xl min-h-screen flex flex-col"
+      style={glassStyle}
+    >
       {/* Header */}
       <div className="p-6 border-b border-white/20">
         <div className="flex items-center gap-3">
@@ -44,18 +45,19 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
             <BrainCircuit className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-lg text-gray-800">OSADI ATS Analyzer</h1>
-            <p className="text-xs text-gray-600"> Recruitment</p>
+            <h1 className="text-lg text-gray-800">OSADI ATS</h1>
+            <p className="text-xs text-gray-600">Analyzer</p>
+            <p className="text-xs text-gray-500">Recruitment</p>
           </div>
         </div>
       </div>
-      
+
       {/* Navigation */}
-      <nav className="p-4 space-y-2">
+      <nav className="p-4 space-y-2 flex-1">
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
-          
+
           return (
             <button
               key={item.id}
@@ -72,12 +74,35 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
           );
         })}
       </nav>
-      
-      {/* Backend Status */}
-      <div className="p-4 mt-auto">
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-blue-100 text-blue-700 border border-blue-200">
-        </div>
+
+      {/* Logout Button */}
+      <div className="p-4 border-t border-white/20">
+        <button
+          onClick={() => {
+            if (window.confirm('Are you sure you want to logout?')) {
+              onLogout();
+            }
+          }}
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            padding: '12px 16px',
+            borderRadius: '12px',
+            border: '1px solid #fecaca',
+            background: '#fef2f2',
+            color: '#dc2626',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: '500',
+          }}
+        >
+          <LogOut style={{ width: '18px', height: '18px' }} />
+          Logout
+        </button>
       </div>
+
     </aside>
   );
 }

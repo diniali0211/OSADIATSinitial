@@ -1,4 +1,7 @@
---extra-index-url https://download.pytorch.org/wh1/cpu
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.0.1+cpu
+sentence-transformers==2.2.2
+keybert==0.8.1
 altair==5.5.0
 annotated-doc==0.0.3
 annotated-types==0.7.0

@@ -112,9 +112,9 @@ class ATSProcessor:
 
             tesseract_available = shutil.which("tesseract")is not None
             if tesseract_available:
-                ocr_text = self.extract_text_with_ocr(filepath)
-            if len(ocr_text.strip()) > len(pdf_text.strip()):
-                return ocr_text
+                ocr_text = self.extract_text_with_ocr(file_path)
+                if len(ocr_text.strip()) > len(pdf_text.strip()):
+                    return ocr_text
 
             return pdf_text
 

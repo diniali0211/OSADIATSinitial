@@ -111,7 +111,7 @@ class ATSProcessor:
             pdf_text = self.extract_text_from_pdf(file_path)
 
             tesseract_available = shutil.which("tesseract")is not None
-            if tesseract_available and len(pdf_text.strip()) < 300:
+            if tesseract_available:
                 ocr_text = self.extract_text_with_ocr(filepath)
             if len(ocr_text.strip()) > len(pdf_text.strip()):
                 return ocr_text

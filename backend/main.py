@@ -27,6 +27,13 @@ from r2_storage import upload_pdf, get_pdf_url
 
 print("MAIN.PY  IS RUNNING")
 
+from database.connection import engine, Base
+
+@app.on_event("startup")
+async def startup():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
 app = FastAPI(title="ATS Resume Analyzer")
 
 

@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/wh1/cpu
 altair==5.5.0
 annotated-doc==0.0.3
 annotated-types==0.7.0

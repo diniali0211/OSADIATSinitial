@@ -26,9 +26,7 @@ else:
     if os.path.exists(windows_path):
         pytesseract.pytesseract.tesseract_cmd = windows_path
     else:
-        raise RuntimeError(
-            "Tesseract OCR not found. Please install Tesseract or add it to PATH."
-        )
+        print ("Warning:Tesseract OCR not found, OCR features will be limited")
 
 
 

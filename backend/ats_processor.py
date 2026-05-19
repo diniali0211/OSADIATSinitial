@@ -143,31 +143,81 @@ class ATSProcessor:
     # -----------------------------
 
     def extract_name(self, text):
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
+        # Common Malaysian name prefixes and first names (male & female)
+        malay_male_prefixes = [
+            "muhammad", "mohd", "mohamad", "mohammad", "mohamed",
+            "muhamad", "md", "m.", "ahmad", "ahmed", "abdul", "abd",
+            "abu", "al", "wan", "nik", "tengku", "tunku", "raja",
+            "megat", "syed", "che", "mat", "zul", "nor", "noor",
+        ]
+        malay_female_prefixes = [
+            "nur", "nurul", "nur", "siti", "sharifah", "faridah",
+            "noraini", "norhaida", "norizan", "norazah", "azizah",
+            "fatimah", "fauziah", "rohani", "zainab", "maimunah",
+            "habibah", "mariam", "khadijah", "ainul", "amirah",
+        ]
+        chinese_prefixes = [
+            "tan", "lim", "lee", "ng", "chan", "wong", "koh", "goh",
+            "cheah", "yeoh", "ooi", "yap", "chong", "teh", "low",
+            "ong", "foo", "sim", "loh", "chin", "heng", "kong",
+        ]
+        indian_prefixes = [
+            "a/l", "a/p", "s/o", "d/o", "rajah", "kumar", "krishnan",
+            "suresh", "ramesh", "ganesh", "vijay", "rajan", "muthu",
+            "selvam", "arumugam", "suppiah", "naidu", "pillai",
+            "a/l", "a/p", "munusamy", "govindasamy", "balakrishnan",
+        ]
+
+        all_prefixes = (
+            malay_male_prefixes
+            + malay_female_prefixes
+            + chinese_prefixes
+            + indian_prefixes
+        )
 
         skip_keywords = [
             "resume", "curriculum", "vitae", "contact", "address",
             "email", "phone", "mobile", "ic no", "gender", "age",
             "nationality", "date", "birth", "status", "particulars",
             "information", "background", "education", "experience",
-            "employment", "history", "skills", "reference", "kala",
-            "objective", "summary", "profile", "personal"
+            "employment", "history", "skills", "reference",
+            "objective", "summary", "profile", "personal",
+            "pulau", "pinang", "selangor", "kuala", "lumpur",
+            "malaysia", "bayan", "lepas", "sungai", "jalan",
         ]
 
-        for line in lines[:20]:
-            words = line.split()
-            lower = line.lower()
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-            if len(words) < 2 or len(words) > 7:
-                continue
-            if any(kw in lower for kw in skip_keywords):
+        for line in lines[:30]:
+            lower = line.lower().strip()
+            words = line.split()
+
+            # Skip if too short, too long, has digits, or has special chars
+            if len(words) < 2 or len(words) > 8:
                 continue
             if any(char.isdigit() for char in line):
                 continue
-            if "@" in line or ":" in line or "-" in line:
+            if any(c in line for c in ["@", ":", "/", "\\", "(", ")"]):
                 continue
-            if line.replace(" ", "").replace(".", "").isalpha():
-                return line.title()
+            if any(kw in lower for kw in skip_keywords):
+                continue
+
+            # Check if line starts with a known Malaysian name prefix
+            first_word = words[0].lower().rstrip(".")
+            if first_word in all_prefixes:
+                # Clean and return — strip trailing noise words
+                name = " ".join(words)
+                # Remove trailing single letters or OCR noise
+                name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
+                return name.title()
+
+            # Also check if ANY word in line is a strong prefix
+            for word in words:
+                w = word.lower().rstrip(".")
+                if w in malay_male_prefixes + malay_female_prefixes:
+                    name = " ".join(words)
+                    name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
+                    return name.title()
 
         # Fallback: spaCy NER
         if self.nlp:

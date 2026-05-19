@@ -10,6 +10,7 @@ import io
 import os
 import uuid
 import csv
+import re
 import sqlalchemy as sa
 
 from ats_processor import ATSProcessor
@@ -101,6 +102,42 @@ async def analyze_resume(
     try:
         analysis = processor.analyze_resume(temp_path)
 
+        # ── Duplicate detection ──────────────────────────────────────
+        extracted_name  = analysis.get("personalInfo", {}).get("name")
+        extracted_phone = analysis.get("personalInfo", {}).get("phone")
+        extracted_email = analysis.get("personalInfo", {}).get("email")
+
+        if extracted_name or extracted_phone or extracted_email:
+            existing = await db.execute(select(Candidate))
+            all_candidates = existing.scalars().all()
+
+            def clean(s):
+                return re.sub(r"\D", "", s or "").strip()
+
+            for c in all_candidates:
+                name_match  = (
+                    extracted_name and c.name and
+                    extracted_name.lower().strip() == (c.name or "").lower().strip()
+                )
+                phone_match = (
+                    extracted_phone and c.phone and
+                    clean(extracted_phone) == clean(c.phone)
+                )
+                email_match = (
+                    extracted_email and c.email and
+                    extracted_email.lower().strip() == (c.email or "").lower().strip()
+                )
+
+                # Flag as duplicate if name + phone match, or email matches
+                if (name_match and phone_match) or email_match:
+                    return {
+                        "duplicate": True,
+                        "message": f"⚠️ This candidate already exists in the system as '{c.name}' (ID: {c.id}, Status: {c.status}). Please review the existing record before proceeding.",
+                        "existing_candidate_id": c.id,
+                        "analysis": analysis
+                    }
+        # ─────────────────────────────────────────────────────────────
+
         try:
             unique_filename = f"{uuid.uuid4()}_{file.filename}"
             pdf_key = upload_pdf(temp_path, unique_filename)
@@ -109,9 +146,9 @@ async def analyze_resume(
             pdf_key = None
 
         candidate = await create_candidate(db, {
-            "name": analysis.get("personalInfo", {}).get("name"),
-            "email": analysis.get("personalInfo", {}).get("email"),
-            "phone": analysis.get("personalInfo", {}).get("phone"),
+            "name": extracted_name,
+            "email": extracted_email,
+            "phone": extracted_phone,
             "location": analysis.get("personalInfo", {}).get("location"),
             "score": analysis.get("overallScore", 0),
             "resume_text": str(analysis),
@@ -119,6 +156,7 @@ async def analyze_resume(
         })
 
         return {
+            "duplicate": False,
             "candidate_id": str(candidate.id),
             "analysis": analysis
         }

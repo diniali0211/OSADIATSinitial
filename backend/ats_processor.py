@@ -93,11 +93,12 @@ class ATSProcessor:
         for page in doc:
             pix = page.get_pixmap(dpi=300)
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+            img = img.filter(__import__('PIL').ImageFilter.SHARPEN)
 
             text = pytesseract.image_to_string(
                 img,
                 lang="eng+msa",
-                config="--oem 3 --psm 11"
+                config="--oem 3 --psm 6"
             )
 
             pages.append(text)
@@ -105,23 +106,34 @@ class ATSProcessor:
         return "\n".join(pages)
 
     def extract_text(self, file_path):
-        ext = os.path.splitext(file_path)[1].lower()
+    ext = os.path.splitext(file_path)[1].lower()
 
-        if ext == ".pdf":
-            pdf_text = self.extract_text_from_pdf(file_path)
+    if ext == ".pdf":
+        pdf_text = self.extract_text_from_pdf(file_path)
+        tesseract_available = shutil.which("tesseract") is not None
 
-            tesseract_available = shutil.which("tesseract")is not None
-            if tesseract_available:
+        if tesseract_available and len(pdf_text.strip()) < 100:
+            try:
                 ocr_text = self.extract_text_with_ocr(file_path)
-                if len(ocr_text.strip()) > len(pdf_text.strip()):
+                if len(ocr_text.strip()) > 50:
                     return ocr_text
+            except Exception as e:
+                print(f"OCR failed: {e}")
 
-            return pdf_text
+        elif tesseract_available and len(pdf_text.strip()) >= 100:
+            try:
+                ocr_text = self.extract_text_with_ocr(file_path)
+                if len(ocr_text.strip()) > len(pdf_text.strip()) * 1.3:
+                    return ocr_text
+            except Exception as e:
+                print(f"OCR failed: {e}")
 
-        if ext in [".docx", ".doc"]:
-            return docx2txt.process(file_path)
+        return pdf_text
 
-        raise ValueError("Unsupported file type")
+    if ext in [".docx", ".doc"]:
+        return docx2txt.process(file_path)
+
+    raise ValueError("Unsupported file type")
 
 
     # -----------------------------

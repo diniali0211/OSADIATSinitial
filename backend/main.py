@@ -301,11 +301,22 @@ async def export_csv(db: AsyncSession = Depends(get_db)):
     writer.writerow(["ID","Name","Email","Phone","Location","Score","Status","Reject Reason","Resume URL","Created At","Abscond Date","Hired Date","Recruiter"])
 
     for c in candidates:
-        writer.writerow([
-            c.id, c.name, c.email, c.phone, c.location,
-            c.score, c.status, c.reject_reason, c.resume_url,
-            c.created_at, c.abscond_date,getattr(c, "hired_date", None), c.recuiter_name
-        ])
+    def fmt_date(d):
+        if d is None:
+            return ""
+        try:
+            return d.strftime("%d/%m/%Y %H:%M")
+        except:
+            return str(d)
+
+    writer.writerow([
+        c.id, c.name, c.email, c.phone, c.location,
+        c.score, c.status, c.reject_reason, c.resume_url,
+        fmt_date(c.created_at),
+        c.abscond_date,
+        fmt_date(getattr(c, "hired_date", None)),
+        c.recuiter_name
+    ])
 
     output.seek(0)
     return StreamingResponse(

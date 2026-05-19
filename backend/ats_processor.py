@@ -4,7 +4,7 @@ import fitz
 import pdfplumber
 import pytesseract
 import io
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageEnhance
 import docx2txt
 import spacy
 from keybert import KeyBERT
@@ -12,7 +12,6 @@ from transformers import AutoTokenizer, AutoModel
 from datetime import datetime
 from langdetect import detect
 import shutil
-import pytesseract
 
 # Cross-platform Tesseract detection
 tesseract_cmd = shutil.which("tesseract")
@@ -87,10 +86,16 @@ class ATSProcessor:
         pages = []
 
         for page in doc:
+            # High DPI for better accuracy
             pix = page.get_pixmap(dpi=300)
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+
+            # Enhance contrast and sharpness for better OCR
+            img = ImageEnhance.Contrast(img).enhance(2.0)
+            img = ImageEnhance.Sharpness(img).enhance(2.0)
             img = img.filter(ImageFilter.SHARPEN)
 
+            # PSM 6 = uniform block of text (best for resumes)
             text = pytesseract.image_to_string(
                 img,
                 lang="eng+msa",
@@ -108,6 +113,7 @@ class ATSProcessor:
             pdf_text = self.extract_text_from_pdf(file_path)
             tesseract_available = shutil.which("tesseract") is not None
 
+            # Always use OCR if text is too short (image-based PDF)
             if tesseract_available and len(pdf_text.strip()) < 100:
                 try:
                     ocr_text = self.extract_text_with_ocr(file_path)
@@ -116,6 +122,7 @@ class ATSProcessor:
                 except Exception as e:
                     print(f"OCR failed: {e}")
 
+            # For normal PDFs, use OCR only if significantly better
             elif tesseract_available and len(pdf_text.strip()) >= 100:
                 try:
                     ocr_text = self.extract_text_with_ocr(file_path)
@@ -138,61 +145,163 @@ class ATSProcessor:
     def extract_name(self, text):
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-        for line in lines[:10]:
+        skip_keywords = [
+            "resume", "curriculum", "vitae", "contact", "address",
+            "email", "phone", "mobile", "ic no", "gender", "age",
+            "nationality", "date", "birth", "status", "particulars",
+            "information", "background", "education", "experience",
+            "employment", "history", "skills", "reference", "kala",
+            "objective", "summary", "profile", "personal"
+        ]
+
+        for line in lines[:20]:
             words = line.split()
-            if line.isupper() and 2 <= len(words) <= 6:
+            lower = line.lower()
+
+            if len(words) < 2 or len(words) > 7:
+                continue
+            if any(kw in lower for kw in skip_keywords):
+                continue
+            if any(char.isdigit() for char in line):
+                continue
+            if "@" in line or ":" in line or "-" in line:
+                continue
+            if line.replace(" ", "").replace(".", "").isalpha():
                 return line.title()
 
+        # Fallback: spaCy NER
         if self.nlp:
-            doc = self.nlp(text[:1500])
+            doc = self.nlp(text[:2000])
             for ent in doc.ents:
-                if ent.label_ == "PERSON":
-                    return ent.text.title()
+                if ent.label_ == "PERSON" and len(ent.text.split()) >= 2:
+                    lower = ent.text.lower()
+                    if not any(kw in lower for kw in skip_keywords):
+                        return ent.text.title()
+
+        return None
+
+    def extract_email(self, text):
+        """
+        Extract email with OCR correction for common misreads.
+        OCR often misreads @ as 'a', '0' as 'o', etc.
+        """
+        # Standard email pattern
+        email_match = re.search(
+            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+            text
+        )
+        if email_match:
+            return email_match.group()
+
+        # OCR sometimes reads @ as '(a)' or 'a)' or '@' with spaces
+        # Try to find email-like patterns with OCR noise
+        ocr_email = re.search(
+            r"[A-Za-z0-9._%+-]+\s*[\(@]\s*[A-Za-z0-9.-]+\s*\.\s*[A-Za-z]{2,}",
+            text
+        )
+        if ocr_email:
+            # Clean it up
+            raw = ocr_email.group()
+            raw = re.sub(r"\s+", "", raw)
+            raw = raw.replace("(a)", "@").replace("(A)", "@")
+            if "@" in raw:
+                return raw
+
+        # Look for lines containing common email domains
+        for line in text.split("\n"):
+            lower = line.lower()
+            if any(domain in lower for domain in ["gmail", "yahoo", "hotmail", "outlook"]):
+                # Try to reconstruct email from this line
+                cleaned = re.sub(r"\s+", "", line)
+                match = re.search(
+                    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
+                    cleaned
+                )
+                if match:
+                    return match.group()
+
+        return None
+
+    def extract_phone(self, text):
+        """
+        Extract phone number with OCR correction.
+        Malaysian numbers: 01X-XXXXXXXX or +601X-XXXXXXXX
+        """
+        # Standard Malaysian phone patterns
+        patterns = [
+            r"(\+?60|0)1[0-9][\s\-]?[0-9]{7,8}",   # 01X-XXXXXXX
+            r"(\+?60|0)1[0-9][0-9]{7,8}",             # 01XXXXXXXXX
+            r"\+?\d[\d\s\-]{9,14}",                    # Generic fallback
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                # Clean up the number
+                phone = match.group()
+                phone = re.sub(r"[^\d+]", "", phone)  # keep only digits and +
+                return phone
+
+        return None
+
+    def extract_location(self, text):
+        """
+        Extract location preferring Malaysian states/cities over street names.
+        """
+        malaysian_states = [
+            "Pulau Pinang", "Penang", "Selangor", "Johor", "Kedah",
+            "Perak", "Sabah", "Sarawak", "Melaka", "Pahang",
+            "Terengganu", "Kelantan", "Negeri Sembilan", "Perlis",
+            "Putrajaya", "Kuala Lumpur", "KL", "Labuan"
+        ]
+
+        malaysian_cities = [
+            "Bayan Lepas", "George Town", "Butterworth", "Petaling Jaya",
+            "Shah Alam", "Subang", "Klang", "Johor Bahru", "Ipoh",
+            "Kuching", "Kota Kinabalu", "Alor Setar", "Seremban",
+            "Kuantan", "Kota Bharu", "Kuala Terengganu", "Kangar"
+        ]
+
+        # Check for Malaysian postcode → city pattern
+        postcode_match = re.search(
+            r"\d{5},?\s*([A-Za-z\s]+),?\s*(' + '|'.join(malaysian_states) + ')",
+            text, re.I
+        )
+        if postcode_match:
+            return postcode_match.group(2).strip()
+
+        # Check for explicit state names
+        for state in malaysian_states:
+            if re.search(rf"\b{re.escape(state)}\b", text, re.I):
+                return state
+
+        # Check for city names
+        for city in malaysian_cities:
+            if re.search(rf"\b{re.escape(city)}\b", text, re.I):
+                return city
+
+        # Fallback to spaCy
+        if self.nlp:
+            blacklist = {
+                "residence", "road", "street", "jalan", "apartment",
+                "idaman", "seroja", "lilitan", "taman", "lorong"
+            }
+            doc = self.nlp(text[:1200])
+            for ent in doc.ents:
+                if ent.label_ in ["GPE", "LOC"]:
+                    if ent.text.lower() not in blacklist and len(ent.text) < 40:
+                        return ent.text
 
         return None
 
     def extract_personal_info(self, text):
         info = {
             "name": self.extract_name(text),
-            "email": None,
-            "phone": None,
+            "email": self.extract_email(text),
+            "phone": self.extract_phone(text),
             "location": self.extract_location(text),
         }
-
-        email = re.search(
-            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-            text,
-        )
-        if email:
-            info["email"] = email.group()
-
-        phone = re.search(r"\+?\d[\d\s\-]{8,}", text)
-        if phone:
-            info["phone"] = phone.group()
-
-        if self.nlp:
-            doc = self.nlp(text[:1200])
-            for ent in doc.ents:
-                if ent.label_ in ["GPE", "LOC"] and len(ent.text) < 40:
-                    info["location"] = ent.text
-                    break
-
         return info
-
-    def extract_location(self, text):
-        doc = self.nlp(text[:800]) if self.nlp else None
-
-        if not doc:
-            return None
-
-        blacklist = {"residence", "road", "street", "jalan", "apartment"}
-
-        for ent in doc.ents:
-            if ent.label_ in ["GPE", "LOC"]:
-                if ent.text.lower() not in blacklist:
-                    return ent.text
-
-        return None
 
     def extract_skills(self, text):
         found = []
@@ -208,71 +317,107 @@ class ATSProcessor:
     def extract_experience(self, text):
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
+        # Section header keywords
+        start_keywords = re.compile(
+            r"(work experience|employment history|professional experience|employment|experience|work history)",
+            re.I
+        )
+        end_keywords = re.compile(
+            r"(education|skills|certification|projects|references|personal particulars|educational)",
+            re.I
+        )
+
         start = None
         end = None
 
         for idx, line in enumerate(lines):
-            if re.search(
-                r"(work experience|employment history|professional experience)",
-                line.lower(),
-            ):
+            if start is None and start_keywords.search(line):
                 start = idx + 1
+            elif start is not None and end_keywords.search(line):
+                end = idx
                 break
 
         if start is None:
             return {"totalYears": 0, "positions": []}
-
-        for idx in range(start, len(lines)):
-            if re.search(
-                r"(education|skills|certification|projects)",
-                lines[idx].lower(),
-            ):
-                end = idx
-                break
 
         section = lines[start:end] if end else lines[start:]
 
         positions = []
         durations = []
 
-        i = 0
+        # Month names for date detection
+        month_pattern = r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)"
+        date_pattern = re.compile(
+            rf"{month_pattern}[a-z]*\.?\s*\d{{4}}\s*[-–to]+\s*({month_pattern}[a-z]*\.?\s*\d{{4}}|Present|present|NOW|now|current)",
+            re.I
+        )
 
+        # Also match year-only ranges like "2018 - 2020"
+        year_range_pattern = re.compile(r"\d{4}\s*[-–]\s*(\d{4}|Present|present)", re.I)
+
+        i = 0
         while i < len(section):
             line = section[i]
 
-            header_match = re.match(r"(.+?)\s+[–-]\s+(.+)", line)
+            # Try to find company name (bold/capitalized lines or lines with Sdn Bhd etc)
+            is_company = bool(re.search(
+                r"(sdn\.?\s*bhd|berhad|sdn|bhd|llc|ltd|pte|corp|inc|enterprise|industries|manufacturing|services|solution|technology|group)",
+                line, re.I
+            ))
 
-            if header_match:
-                title = header_match.group(1).strip()
-                company = header_match.group(2).strip()
+            # Look for job title - company pattern: "Title – Company" or "Title at Company"
+            header_match = re.match(r"(.+?)\s*[–\-]\s*(.+)", line)
 
-                lookahead = " ".join(section[i: i + 3])
+            if is_company or header_match:
+                company = line if is_company else (header_match.group(2).strip() if header_match else "")
+                title = header_match.group(1).strip() if header_match else ""
 
-                date_match = re.search(
-                    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}.*?(Present|\d{4})",
-                    lookahead,
-                    re.I,
-                )
+                # Look ahead for date and title/position
+                lookahead = " ".join(section[i:min(i + 5, len(section))])
+
+                # Try to find date range
+                date_match = date_pattern.search(lookahead)
+                if not date_match:
+                    date_match = year_range_pattern.search(lookahead)
 
                 duration = date_match.group(0) if date_match else ""
 
-                positions.append(
-                    {
+                # Try to find position if not already found
+                if not title:
+                    for j in range(i + 1, min(i + 4, len(section))):
+                        pos_match = re.search(r"(position|role|jawatan)\s*[:\-]?\s*(.+)", section[j], re.I)
+                        if pos_match:
+                            title = pos_match.group(2).strip()
+                            break
+
+                if company:
+                    positions.append({
                         "title": title or "Unknown Role",
-                        "company": company or "Unknown Company",
+                        "company": company,
                         "duration": duration,
-                    }
-                )
+                    })
+                    durations.append(duration)
+                    i += 2
+                    continue
 
-                durations.append(duration)
+            # Match "Position : Technical Operator 1" style
+            pos_label_match = re.match(r"position\s*[:\-]\s*(.+)", line, re.I)
+            if pos_label_match and positions:
+                positions[-1]["title"] = pos_label_match.group(1).strip()
 
-                i += 2
-                continue
+            # Match "Period : 29 OCTOBER 2018 – 1 JUN 2020" style
+            period_match = re.match(r"period\s*[:\-]\s*(.+)", line, re.I)
+            if period_match:
+                duration_text = period_match.group(1).strip()
+                years = re.findall(r"\d{4}", duration_text)
+                if years and positions:
+                    positions[-1]["duration"] = duration_text
+                    durations[-1] = duration_text if durations else duration_text
 
             i += 1
 
+        # Calculate total years
         total = 0
-
         for r in durations:
             years = re.findall(r"\d{4}", r or "")
             if len(years) >= 2:
@@ -304,11 +449,11 @@ class ATSProcessor:
             "mechanical", "maintenance", "repair", "technician",
             "machine", "equipment", "inspection", "safety",
             "troubleshooting", "motor", "electrical", "hydraulic",
-            "quality", "chemical"
+            "quality", "chemical", "operator", "wbg", "ltl",
+            "conversion", "recovery", "process"
         }
 
         matched = 0
-
         for s in skills:
             name = s.get("name", "").lower()
             if name in technician_keywords:
@@ -340,11 +485,13 @@ class ATSProcessor:
             "Pengalaman": "Experience",
             "Pendidikan": "Education",
             "Jantina": "Gender",
-            "Status": "Status",
+            "Jawatan": "Position",
+            "Tempoh": "Period",
+            "Syarikat": "Company",
         }
 
         for k, v in replacements.items():
-            text = re.sub(rf"(?i){k}", v, text)
+            text = re.sub(rf"(?i)\b{k}\b", v, text)
 
         return text
 
@@ -361,7 +508,7 @@ class ATSProcessor:
         print("\n===== NORMALIZED TEXT (FIRST 1500 CHARS) =====\n")
         print(text[:1500])
 
-        if not text or len(text.strip()) < 200:
+        if not text or len(text.strip()) < 100:
             raise Exception("Insufficient text extracted")
 
         try:

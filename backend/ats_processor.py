@@ -4,7 +4,7 @@ import fitz
 import pdfplumber
 import pytesseract
 import io
-from PIL import Image
+from PIL import Image, ImageFilter
 import docx2txt
 import spacy
 from keybert import KeyBERT
@@ -12,7 +12,6 @@ from transformers import AutoTokenizer, AutoModel
 from datetime import datetime
 from langdetect import detect
 import shutil
-import os
 import pytesseract
 
 # Cross-platform Tesseract detection
@@ -21,14 +20,11 @@ tesseract_cmd = shutil.which("tesseract")
 if tesseract_cmd:
     pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 else:
-    # Windows fallback (local dev only)
     windows_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
     if os.path.exists(windows_path):
         pytesseract.pytesseract.tesseract_cmd = windows_path
     else:
-        print ("Warning:Tesseract OCR not found, OCR features will be limited")
-
-
+        print("Warning: Tesseract OCR not found, OCR features will be limited")
 
 
 class ATSProcessor:
@@ -93,7 +89,7 @@ class ATSProcessor:
         for page in doc:
             pix = page.get_pixmap(dpi=300)
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
-            img = img.filter(__import__('PIL').ImageFilter.SHARPEN)
+            img = img.filter(ImageFilter.SHARPEN)
 
             text = pytesseract.image_to_string(
                 img,
@@ -106,42 +102,40 @@ class ATSProcessor:
         return "\n".join(pages)
 
     def extract_text(self, file_path):
-    ext = os.path.splitext(file_path)[1].lower()
+        ext = os.path.splitext(file_path)[1].lower()
 
-    if ext == ".pdf":
-        pdf_text = self.extract_text_from_pdf(file_path)
-        tesseract_available = shutil.which("tesseract") is not None
+        if ext == ".pdf":
+            pdf_text = self.extract_text_from_pdf(file_path)
+            tesseract_available = shutil.which("tesseract") is not None
 
-        if tesseract_available and len(pdf_text.strip()) < 100:
-            try:
-                ocr_text = self.extract_text_with_ocr(file_path)
-                if len(ocr_text.strip()) > 50:
-                    return ocr_text
-            except Exception as e:
-                print(f"OCR failed: {e}")
+            if tesseract_available and len(pdf_text.strip()) < 100:
+                try:
+                    ocr_text = self.extract_text_with_ocr(file_path)
+                    if len(ocr_text.strip()) > 50:
+                        return ocr_text
+                except Exception as e:
+                    print(f"OCR failed: {e}")
 
-        elif tesseract_available and len(pdf_text.strip()) >= 100:
-            try:
-                ocr_text = self.extract_text_with_ocr(file_path)
-                if len(ocr_text.strip()) > len(pdf_text.strip()) * 1.3:
-                    return ocr_text
-            except Exception as e:
-                print(f"OCR failed: {e}")
+            elif tesseract_available and len(pdf_text.strip()) >= 100:
+                try:
+                    ocr_text = self.extract_text_with_ocr(file_path)
+                    if len(ocr_text.strip()) > len(pdf_text.strip()) * 1.3:
+                        return ocr_text
+                except Exception as e:
+                    print(f"OCR failed: {e}")
 
-        return pdf_text
+            return pdf_text
 
-    if ext in [".docx", ".doc"]:
-        return docx2txt.process(file_path)
+        if ext in [".docx", ".doc"]:
+            return docx2txt.process(file_path)
 
-    raise ValueError("Unsupported file type")
-
+        raise ValueError("Unsupported file type")
 
     # -----------------------------
     # INFORMATION EXTRACTION
     # -----------------------------
 
     def extract_name(self, text):
-
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
         for line in lines[:10]:
@@ -158,7 +152,6 @@ class ATSProcessor:
         return None
 
     def extract_personal_info(self, text):
-
         info = {
             "name": self.extract_name(text),
             "email": None,
@@ -177,7 +170,6 @@ class ATSProcessor:
         if phone:
             info["phone"] = phone.group()
 
-        # LOCATION = first short GPE entity only
         if self.nlp:
             doc = self.nlp(text[:1200])
             for ent in doc.ents:
@@ -202,9 +194,7 @@ class ATSProcessor:
 
         return None
 
-    
     def extract_skills(self, text):
-
         found = []
         lower = text.lower()
 
@@ -216,13 +206,11 @@ class ATSProcessor:
         return found
 
     def extract_experience(self, text):
-
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
         start = None
         end = None
 
-        # ---- Find WORK EXPERIENCE section ----
         for idx, line in enumerate(lines):
             if re.search(
                 r"(work experience|employment history|professional experience)",
@@ -250,18 +238,15 @@ class ATSProcessor:
         i = 0
 
         while i < len(section):
-
             line = section[i]
 
-            # ---- JOB HEADER: Title – Company ----
             header_match = re.match(r"(.+?)\s+[–-]\s+(.+)", line)
 
             if header_match:
-
                 title = header_match.group(1).strip()
                 company = header_match.group(2).strip()
 
-                lookahead = " ".join(section[i : i + 3])
+                lookahead = " ".join(section[i: i + 3])
 
                 date_match = re.search(
                     r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}.*?(Present|\d{4})",
@@ -286,10 +271,6 @@ class ATSProcessor:
 
             i += 1
 
-        # -------------------------------
-        # Calculate total years
-        # -------------------------------
-
         total = 0
 
         for r in durations:
@@ -304,9 +285,7 @@ class ATSProcessor:
             "positions": positions,
         }
 
-
     def months_from_range(self, text):
-
         if not text:
             return 0
 
@@ -320,24 +299,12 @@ class ATSProcessor:
 
         return max(1, (end - start) * 12)
 
-
     def calculate_job_match(self, skills):
-
         technician_keywords = {
-            "mechanical",
-            "maintenance",
-            "repair",
-            "technician",
-            "machine",
-            "equipment",
-            "inspection",
-            "safety",
-            "troubleshooting",
-            "motor",
-            "electrical",
-            "hydraulic",
-            "quality",
-            "chemical"
+            "mechanical", "maintenance", "repair", "technician",
+            "machine", "equipment", "inspection", "safety",
+            "troubleshooting", "motor", "electrical", "hydraulic",
+            "quality", "chemical"
         }
 
         matched = 0
@@ -355,7 +322,6 @@ class ATSProcessor:
             "matchPercentage": score,
             "recommendations": []
         }
-
 
     # -----------------------------
     # MAIN ANALYSIS
@@ -382,9 +348,7 @@ class ATSProcessor:
 
         return text
 
-
     def analyze_resume(self, file_path):
-
         print("🔥 ATS RUNNING 🔥")
 
         raw_text = self.extract_text(file_path)
@@ -407,11 +371,7 @@ class ATSProcessor:
 
         personal_info = self.extract_personal_info(text)
         skills = self.extract_skills(text)
-        
-        # -------- EXPERIENCE PARSING --------
-
         experience = self.extract_experience(text)
-
         job_match = self.calculate_job_match(skills)
 
         overall = min(
@@ -431,4 +391,3 @@ class ATSProcessor:
             "language": lang,
             "textLength": len(text),
         }
-

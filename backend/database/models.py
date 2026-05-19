@@ -18,6 +18,7 @@ class Candidate(Base):
     resume_url = Column(String, nullable=True)
     reject_reason = Column(String, nullable=True)
     recuiter_name = Column(String, nullable=True)
+    hired_date = Column(DateTime, nullable=True)
 
 
 class Settings(Base):

@@ -17,6 +17,58 @@ const RECRUITERS = [
   "Zawani",
 ];
 
+const REJECT_REASONS = [
+  "INCOMPLETE",
+  "LOW_SKILL",
+  "INSTRUCTIONS",
+  "LEVEL_MISMATCH",
+  "CULTURE",
+  "VETTING",
+];
+
+// Parse education array from stored resume_text string
+function parseEducationFromText(resumeText: string): any[] {
+  try {
+    // Try to find education list in the stored analysis string
+    const eduMatch = resumeText.match(/'education':\s*(\[.*?\])/s);
+    if (eduMatch) {
+      // Convert Python-style dict to JSON
+      const jsonStr = eduMatch[1]
+        .replace(/'/g, '"')
+        .replace(/None/g, 'null')
+        .replace(/True/g, 'true')
+        .replace(/False/g, 'false');
+      return JSON.parse(jsonStr);
+    }
+  } catch {}
+  return [];
+}
+
+// Parse total years from stored resume_text string
+function parseTotalYears(resumeText: string): number | null {
+  try {
+    const match = resumeText.match(/'totalYears':\s*(\d+)/);
+    if (match) return parseInt(match[1]);
+  } catch {}
+  return null;
+}
+
+// Parse positions from stored resume_text string
+function parsePositions(resumeText: string): any[] {
+  try {
+    const match = resumeText.match(/'positions':\s*(\[.*?\])/s);
+    if (match) {
+      const jsonStr = match[1]
+        .replace(/'/g, '"')
+        .replace(/None/g, 'null')
+        .replace(/True/g, 'true')
+        .replace(/False/g, 'false');
+      return JSON.parse(jsonStr);
+    }
+  } catch {}
+  return [];
+}
+
 export function DecisionQueue() {
   const [kivCandidates, setKivCandidates] = useState<any[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<any | null>(null);
@@ -39,12 +91,14 @@ export function DecisionQueue() {
         .filter((c: any) => c.status === "KIV")
         .map((c: any) => {
           let totalYears = null;
+          let education: any[] = [];
+          let positions: any[] = [];
+
           try {
             if (typeof c.resume_text === 'string') {
-              const match = c.resume_text.match(/'totalYears':\s*(\d+)/);
-              if (match) {
-                totalYears = parseInt(match[1]);
-              }
+              totalYears = parseTotalYears(c.resume_text);
+              education = parseEducationFromText(c.resume_text);
+              positions = parsePositions(c.resume_text);
             }
           } catch {}
 
@@ -62,8 +116,10 @@ export function DecisionQueue() {
                 location: c.location,
               },
               experience: {
-                totalYears: totalYears,
+                totalYears,
+                positions,
               },
+              education,
               skills: [],
             },
           };
@@ -77,15 +133,6 @@ export function DecisionQueue() {
   useEffect(() => {
     loadKIV();
   }, []);
-
-  const REJECT_REASONS = [
-    "INCOMPLETE",
-    "LOW_SKILL",
-    "INSTRUCTIONS",
-    "LEVEL_MISMATCH",
-    "CULTURE",
-    "VETTING",
-  ];
 
   const confirmReject = async () => {
     if (!rejectModal.candidateId || !rejectReason) return;
@@ -188,7 +235,9 @@ export function DecisionQueue() {
             borderRadius: '16px',
             padding: '32px',
             width: '100%',
-            maxWidth: '600px',
+            maxWidth: '620px',
+            maxHeight: '85vh',
+            overflowY: 'auto',
             boxShadow: '0 25px 50px rgba(0,0,0,0.3)',
             position: 'relative',
           }}>
@@ -210,14 +259,21 @@ export function DecisionQueue() {
                 <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#111', marginBottom: '4px' }}>
                   {selectedCandidate.analysis?.personalInfo?.name}
                 </h3>
-                <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '4px' }}>
+                <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '2px' }}>
                   {selectedCandidate.analysis?.experience?.totalYears
                     ? `${selectedCandidate.analysis.experience.totalYears} years experience`
                     : 'Experience not detected'}
                 </p>
-                <p style={{ fontSize: '14px', color: '#6b7280' }}>
-                  {selectedCandidate.fileName}
-                </p>
+                {selectedCandidate.analysis?.personalInfo?.phone && (
+                  <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '2px' }}>
+                    📞 {selectedCandidate.analysis.personalInfo.phone}
+                  </p>
+                )}
+                {selectedCandidate.analysis?.personalInfo?.location && (
+                  <p style={{ fontSize: '14px', color: '#6b7280' }}>
+                    📍 {selectedCandidate.analysis.personalInfo.location}
+                  </p>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -230,10 +286,55 @@ export function DecisionQueue() {
               </div>
             </div>
 
+            {/* Work Experience */}
+            {selectedCandidate.analysis?.experience?.positions?.length > 0 && (
+              <div style={{ marginBottom: '24px' }}>
+                <h4 style={{ fontWeight: '600', fontSize: '15px', color: '#111', marginBottom: '10px' }}>
+                  Work Experience ({selectedCandidate.analysis.experience.totalYears ?? 0} yrs)
+                </h4>
+                {selectedCandidate.analysis.experience.positions.map((pos: any, i: number) => (
+                  <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', marginBottom: '8px', background: '#fafafa' }}>
+                    <p style={{ fontWeight: '500', fontSize: '14px', color: '#1f2937' }}>{pos.title}</p>
+                    <p style={{ fontSize: '13px', color: '#4b5563' }}>{pos.company}</p>
+                    {pos.duration && (
+                      <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{pos.duration}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Education */}
+            {selectedCandidate.analysis?.education?.length > 0 && (
+              <div style={{ marginBottom: '24px' }}>
+                <h4 style={{ fontWeight: '600', fontSize: '15px', color: '#111', marginBottom: '10px' }}>
+                  Education
+                </h4>
+                {selectedCandidate.analysis.education.map((edu: any, i: number) => (
+                  <div key={i} style={{ border: '1px solid #e0e7ff', borderRadius: '8px', padding: '12px', marginBottom: '8px', background: 'rgba(238,242,255,0.5)' }}>
+                    {edu.level && (
+                      <span style={{ display: 'inline-block', background: '#e0e7ff', color: '#3730a3', padding: '2px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>
+                        {edu.level}
+                      </span>
+                    )}
+                    {edu.institution && (
+                      <p style={{ fontWeight: '500', fontSize: '14px', color: '#1f2937' }}>{edu.institution}</p>
+                    )}
+                    {edu.field && (
+                      <p style={{ fontSize: '13px', color: '#4b5563' }}>{edu.field}</p>
+                    )}
+                    {edu.year && (
+                      <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{edu.year}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Skills */}
             {selectedCandidate.analysis?.skills?.length > 0 && (
               <div style={{ marginBottom: '24px' }}>
-                <h4 style={{ fontWeight: '500', marginBottom: '8px', color: '#111' }}>Top Skills</h4>
+                <h4 style={{ fontWeight: '600', fontSize: '15px', color: '#111', marginBottom: '8px' }}>Skills</h4>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                   {selectedCandidate.analysis.skills.slice(0, 10).map((s: any, index: number) => (
                     <span
@@ -248,7 +349,7 @@ export function DecisionQueue() {
             )}
 
             {/* Actions */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '24px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '24px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
               <button
                 onClick={async () => {
                   try {
@@ -275,14 +376,12 @@ export function DecisionQueue() {
                 >
                   Hire
                 </button>
-
                 <button
                   onClick={() => setRejectModal({ open: true, candidateId: selectedCandidate.id })}
                   style={{ padding: '8px 20px', background: '#dc2626', color: 'white', borderRadius: '8px', border: 'none', cursor: 'pointer', fontSize: '14px' }}
                 >
                   Reject
                 </button>
-
                 <button
                   onClick={() => setSelectedCandidate(null)}
                   style={{ padding: '8px 20px', background: '#f3f4f6', color: '#374151', borderRadius: '8px', border: '1px solid #d1d5db', cursor: 'pointer', fontSize: '14px' }}
@@ -302,35 +401,24 @@ export function DecisionQueue() {
           className="fixed inset-0 z-[9999] flex items-center justify-center px-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
         >
-          <div style={{
-            background: 'white',
-            borderRadius: '12px',
-            padding: '24px',
-            width: '100%',
-            maxWidth: '400px',
-            boxShadow: '0 25px 50px rgba(0,0,0,0.3)',
-          }}>
+          <div style={{ background: 'white', borderRadius: '12px', padding: '24px', width: '100%', maxWidth: '400px', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
             <h3 style={{ color: '#2563eb', fontWeight: '600', fontSize: '18px', marginBottom: '8px' }}>
               Select Recruiter
             </h3>
             <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '16px' }}>
               Who is hiring this candidate?
             </p>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
               {RECRUITERS.map((recruiter) => (
                 <button
                   key={recruiter}
                   onClick={() => setSelectedRecruiter(recruiter)}
                   style={{
-                    padding: '10px 16px',
-                    borderRadius: '8px',
+                    padding: '10px 16px', borderRadius: '8px',
                     border: selectedRecruiter === recruiter ? '2px solid #2563eb' : '1px solid #d1d5db',
                     background: selectedRecruiter === recruiter ? '#eff6ff' : 'white',
                     color: selectedRecruiter === recruiter ? '#2563eb' : '#374151',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    fontSize: '14px',
+                    cursor: 'pointer', textAlign: 'left', fontSize: '14px',
                     fontWeight: selectedRecruiter === recruiter ? '600' : '400',
                   }}
                 >
@@ -338,7 +426,6 @@ export function DecisionQueue() {
                 </button>
               ))}
             </div>
-
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button
                 onClick={() => { setRecruiterModal({ open: false, candidateId: null }); setSelectedRecruiter(''); }}
@@ -349,15 +436,7 @@ export function DecisionQueue() {
               <button
                 onClick={confirmHire}
                 disabled={!selectedRecruiter}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '8px',
-                  background: selectedRecruiter ? '#2563eb' : '#93c5fd',
-                  color: 'white',
-                  fontSize: '14px',
-                  border: 'none',
-                  cursor: selectedRecruiter ? 'pointer' : 'not-allowed'
-                }}
+                style={{ padding: '8px 16px', borderRadius: '8px', background: selectedRecruiter ? '#2563eb' : '#93c5fd', color: 'white', fontSize: '14px', border: 'none', cursor: selectedRecruiter ? 'pointer' : 'not-allowed' }}
               >
                 Confirm Hire
               </button>
@@ -372,39 +451,27 @@ export function DecisionQueue() {
           className="fixed inset-0 z-[9999] flex items-center justify-center px-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
         >
-          <div style={{
-            background: 'white',
-            borderRadius: '12px',
-            padding: '24px',
-            width: '100%',
-            maxWidth: '400px',
-            boxShadow: '0 25px 50px rgba(0,0,0,0.3)',
-          }}>
+          <div style={{ background: 'white', borderRadius: '12px', padding: '24px', width: '100%', maxWidth: '400px', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
             <h3 style={{ color: '#dc2626', fontWeight: '600', fontSize: '18px', marginBottom: '16px' }}>
               Select Reject Reason
             </h3>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
               {REJECT_REASONS.map((reason) => (
                 <button
                   key={reason}
                   onClick={() => setRejectReason(reason)}
                   style={{
-                    padding: '10px 16px',
-                    borderRadius: '8px',
+                    padding: '10px 16px', borderRadius: '8px',
                     border: rejectReason === reason ? '2px solid #dc2626' : '1px solid #d1d5db',
                     background: rejectReason === reason ? '#fee2e2' : 'white',
                     color: rejectReason === reason ? '#dc2626' : '#374151',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    fontSize: '14px',
+                    cursor: 'pointer', textAlign: 'left', fontSize: '14px',
                   }}
                 >
                   {reason}
                 </button>
               ))}
             </div>
-
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button
                 onClick={() => { setRejectModal({ open: false, candidateId: null }); setRejectReason(''); }}
@@ -415,15 +482,7 @@ export function DecisionQueue() {
               <button
                 onClick={confirmReject}
                 disabled={!rejectReason}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '8px',
-                  background: rejectReason ? '#dc2626' : '#fca5a5',
-                  color: 'white',
-                  fontSize: '14px',
-                  border: 'none',
-                  cursor: rejectReason ? 'pointer' : 'not-allowed'
-                }}
+                style={{ padding: '8px 16px', borderRadius: '8px', background: rejectReason ? '#dc2626' : '#fca5a5', color: 'white', fontSize: '14px', border: 'none', cursor: rejectReason ? 'pointer' : 'not-allowed' }}
               >
                 Confirm Reject
               </button>

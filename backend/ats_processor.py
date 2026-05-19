@@ -549,8 +549,9 @@ class ATSProcessor:
     def extract_education(self, text):
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-        start_keywords = re.compile(
-            r"(education|educational background|academic|qualification|sijil|diploma|degree|spm|stpm|upsr|pt3)",
+        # Section header — only pure header lines, NOT lines that are qualifications themselves
+        section_header = re.compile(
+            r"^(educational background|academic qualifications?|education|academic background|qualifications?)$",
             re.I
         )
         end_keywords = re.compile(
@@ -558,77 +559,122 @@ class ATSProcessor:
             re.I
         )
 
+        # All qualification keywords including Malaysian certs
+        qual_keywords = re.compile(
+            r"(phd|degree|bachelor|master|diploma|certificate|sijil|"
+            r"malaysian school certificate|"
+            r"\bspm\b|\bstpm\b|\bupsr\b|\bpt3\b|\bpmr\b|"
+            r"igcse|a[\s\-]?level|o[\s\-]?level|lcci|"
+            r"\bskm\b|\bskkm\b|\bdkm\b|\bdkkm\b|\bsvm\b|"
+            r"vocational|vokasional|teknikal|technical)",
+            re.I
+        )
+
+        year_pattern = re.compile(r"\b(19|20)\d{2}\b")
+        year_range_pattern = re.compile(r"\b(19|20)\d{2}\s*[-–]\s*(19|20)\d{2}\b")
+
+        # Find education section boundaries
         start = None
         end = None
 
         for idx, line in enumerate(lines):
-            if start is None and start_keywords.search(line):
-                start = idx + 1
+            if start is None:
+                # Only trigger on pure section header lines
+                if section_header.search(line):
+                    start = idx + 1
+                # OR if line itself contains a qual keyword — start from this line
+                elif qual_keywords.search(line):
+                    # Check surrounding context — is this in an education-like block?
+                    context = " ".join(lines[max(0, idx-3):idx+1]).lower()
+                    if any(kw in context for kw in ["education", "academic", "school", "college", "university", "sijil", "diploma"]):
+                        start = idx
             elif start is not None and end_keywords.search(line):
                 end = idx
                 break
 
         if start is None:
-            return []
+            # Fallback: scan whole document for qualification lines
+            start = 0
 
-        section = lines[start:end] if end else lines[start:start + 20]
+        section = lines[start:end] if end else lines[start:min(start + 40, len(lines))]
 
         qualifications = []
-
-        # Known qualification keywords
-        qual_keywords = re.compile(
-            r"(phd|degree|bachelor|master|diploma|certificate|sijil|spm|stpm|upsr|pt3|igcse|a.level|o.level|lcci|svm|skm|skkm|dkm|dkkm)",
-            re.I
-        )
-
-        # Year pattern
-        year_pattern = re.compile(r"\b(19|20)\d{2}\b")
+        seen_levels = set()
 
         i = 0
         while i < len(section):
             line = section[i]
+            lower = line.lower()
 
-            # Look for qualification level
             qual_match = qual_keywords.search(line)
-            year_match = year_pattern.search(line)
+            year_match = year_range_pattern.search(line) or year_pattern.search(line)
 
-            if qual_match or year_match:
+            if qual_match:
+                level_raw = qual_match.group(0).strip()
+
+                # Normalize level name
+                level_map = {
+                    "malaysian school certificate": "SPM",
+                    "sijil pelajaran malaysia": "SPM",
+                    "sijil tinggi pelajaran malaysia": "STPM",
+                    "vocational": "SKM/VOCATIONAL",
+                    "vokasional": "SKM/VOCATIONAL",
+                    "teknikal": "TECHNICAL",
+                    "technical": "TECHNICAL",
+                }
+                level = level_map.get(level_raw.lower(), level_raw.upper())
+
+                # Avoid duplicate levels
+                if level in seen_levels:
+                    i += 1
+                    continue
+                seen_levels.add(level)
+
                 qualification = {
-                    "level": qual_match.group(0).upper() if qual_match else "",
+                    "level": level,
                     "institution": "",
                     "field": "",
                     "year": year_match.group(0) if year_match else "",
                 }
 
                 # Look at surrounding lines for institution and field
-                context_lines = section[max(0, i-1):min(len(section), i+3)]
+                context_lines = section[i:min(len(section), i + 5)]
                 for ctx in context_lines:
-                    # Institution usually contains school/college/university keywords
-                    if re.search(r"(university|universiti|college|kolej|school|sekolah|institut|polytechnic|politeknik)", ctx, re.I):
-                        qualification["institution"] = ctx.strip()
-                    # Field/major
-                    elif re.search(r"(engineering|science|business|arts|technology|management|accounting|elektrik|mekanikal|computer|it)", ctx, re.I):
-                        qualification["field"] = ctx.strip()
+                    if re.search(r"(university|universiti|college|kolej|school|sekolah|institut|polytechnic|politeknik|akademi)", ctx, re.I):
+                        if not qualification["institution"]:
+                            qualification["institution"] = ctx.strip()
+                    elif re.search(r"(engineering|science|business|arts|technology|management|accounting|elektrik|mekanikal|computer|it|rendah|juru|teknik)", ctx, re.I):
+                        if not qualification["field"]:
+                            qualification["field"] = ctx.strip()
+                    # Year range in nearby line
+                    if not qualification["year"]:
+                        yr = year_range_pattern.search(ctx) or year_pattern.search(ctx)
+                        if yr:
+                            qualification["year"] = yr.group(0)
 
-                # If institution still empty, use next line
+                # If line itself contains school name
+                if re.search(r"(university|universiti|college|kolej|school|sekolah|institut|polytechnic|politeknik)", line, re.I):
+                    qualification["institution"] = line.strip()
+
+                # If institution still empty, try next non-qual line
                 if not qualification["institution"] and i + 1 < len(section):
                     next_line = section[i + 1]
                     if not qual_keywords.search(next_line) and len(next_line) > 5:
                         qualification["institution"] = next_line.strip()
 
                 qualifications.append(qualification)
-                i += 2
+                i += 1
                 continue
 
-            # Also catch lines with school/college names even without qual keyword
+            # Catch school/college lines even without qual keyword
             if re.search(r"(university|universiti|college|kolej|sekolah|institut|polytechnic|politeknik)", line, re.I):
                 if not any(q["institution"] == line.strip() for q in qualifications):
-                    year_m = year_pattern.search(line)
+                    yr = year_range_pattern.search(line) or year_pattern.search(line)
                     qualifications.append({
                         "level": "",
                         "institution": line.strip(),
                         "field": "",
-                        "year": year_m.group(0) if year_m else "",
+                        "year": yr.group(0) if yr else "",
                     })
 
             i += 1

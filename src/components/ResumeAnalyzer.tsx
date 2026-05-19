@@ -4,6 +4,7 @@ import {
   Upload,
   AlertCircle,
   FileSearch,
+  AlertTriangle,
 } from 'lucide-react';
 import { atsApi } from '../services/atsApi';
 
@@ -49,6 +50,11 @@ export function ResumeAnalyzer() {
   const [analysisResults, setAnalysisResults] = useState<any[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState('');
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    message: string;
+    existingId: string | number;
+    fileName: string;
+  } | null>(null);
 
   const [decisionModal, setDecisionModal] = useState<{
     open: boolean;
@@ -71,10 +77,37 @@ export function ResumeAnalyzer() {
   const handleFiles = async (files: File[]) => {
     setUploadedFiles(prev => [...prev, ...files]);
     setIsAnalyzing(true);
+    setError('');
+    setDuplicateWarning(null);
 
     try {
       for (const file of files) {
-        const { resumeId, analysis } = await atsApi.uploadResume(file);
+        const response = await atsApi.uploadResume(file);
+
+        // ── Duplicate detected ──────────────────────────────────────
+        if (response.duplicate) {
+          setDuplicateWarning({
+            message: response.message,
+            existingId: response.existing_candidate_id,
+            fileName: file.name,
+          });
+          // Still show the analysis result below the warning (read-only)
+          const candidate = {
+            id: response.existing_candidate_id,
+            fileName: file.name,
+            uploadedAt: new Date().toISOString(),
+            analysis: response.analysis ?? {},
+            decision: 'pending',
+            decidedAt: null,
+            decisionReason: undefined,
+            isDuplicate: true,
+          };
+          setAnalysisResults(prev => [...prev, candidate]);
+          continue;
+        }
+        // ─────────────────────────────────────────────────────────────
+
+        const { resumeId, analysis } = response;
 
         const candidate = {
           id: resumeId,
@@ -84,6 +117,7 @@ export function ResumeAnalyzer() {
           decision: 'pending',
           decidedAt: null,
           decisionReason: undefined,
+          isDuplicate: false,
         };
 
         candidateStore.addCandidate(candidate);
@@ -105,7 +139,6 @@ export function ResumeAnalyzer() {
     reason?: string,
     recruiter?: string,
   ) => {
-    console.log("Sending candidate_id:", id);
     try {
       await atsApi.setDecision(id, decision.toUpperCase(), reason, recruiter);
       candidateStore.setDecision(id, decision, reason);
@@ -113,16 +146,10 @@ export function ResumeAnalyzer() {
       setAnalysisResults(prev =>
         prev.map(c =>
           c.id === id
-            ? {
-                ...c,
-                decision,
-                decisionReason: reason,
-                decidedAt: new Date().toISOString(),
-              }
+            ? { ...c, decision, decisionReason: reason, decidedAt: new Date().toISOString() }
             : c
         )
       );
-
     } catch (err) {
       console.error(err);
       setError("Failed to update decision");
@@ -132,25 +159,14 @@ export function ResumeAnalyzer() {
   const confirmReject = () => {
     if (!decisionModal.candidateId) return;
     if (selectedReasons.length === 0) return;
-
-    applyDecision(
-      decisionModal.candidateId,
-      'rejected',
-      selectedReasons[0],
-    );
-
+    applyDecision(decisionModal.candidateId, 'rejected', selectedReasons[0]);
     setDecisionModal({ open: false, candidateId: null, decision: null });
     setSelectedReasons([]);
   };
 
   const confirmHire = async () => {
     if (!recruiterModal.candidateId || !selectedRecruiter) return;
-    await applyDecision(
-      recruiterModal.candidateId,
-      'hired',
-      undefined,
-      selectedRecruiter,
-    );
+    await applyDecision(recruiterModal.candidateId, 'hired', undefined, selectedRecruiter);
     setRecruiterModal({ open: false, candidateId: null });
     setSelectedRecruiter('');
   };
@@ -170,9 +186,7 @@ export function ResumeAnalyzer() {
           multiple
           accept=".pdf,.doc,.docx"
           hidden
-          onChange={e =>
-            e.target.files && handleFiles(Array.from(e.target.files))
-          }
+          onChange={e => e.target.files && handleFiles(Array.from(e.target.files))}
         />
         <Upload style={{ margin: '0 auto 8px', color: '#a855f7', width: '32px', height: '32px' }} />
         <p style={{ color: '#4b5563', fontWeight: '500' }}>Click to upload resumes</p>
@@ -190,8 +204,36 @@ export function ResumeAnalyzer() {
       {/* Error */}
       {error && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#dc2626', background: '#fef2f2', padding: '12px', borderRadius: '8px' }}>
-          <AlertCircle style={{ width: '16px', height: '16px' }} />
+          <AlertCircle style={{ width: '16px', height: '16px', flexShrink: 0 }} />
           {error}
+        </div>
+      )}
+
+      {/* ── Duplicate Warning Banner ── */}
+      {duplicateWarning && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: '12px',
+          background: '#fffbeb', border: '1px solid #f59e0b',
+          borderRadius: '10px', padding: '16px',
+        }}>
+          <AlertTriangle style={{ width: '20px', height: '20px', color: '#d97706', flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1 }}>
+            <p style={{ fontWeight: '600', color: '#92400e', marginBottom: '4px' }}>
+              Duplicate Candidate Detected
+            </p>
+            <p style={{ fontSize: '14px', color: '#78350f' }}>
+              {duplicateWarning.message}
+            </p>
+            <p style={{ fontSize: '12px', color: '#a16207', marginTop: '6px' }}>
+              File: <strong>{duplicateWarning.fileName}</strong> — The resume analysis is shown below for reference, but no new record was created.
+            </p>
+          </div>
+          <button
+            onClick={() => setDuplicateWarning(null)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#a16207', fontSize: '18px', lineHeight: 1 }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -202,63 +244,68 @@ export function ResumeAnalyzer() {
         const skills = analysis.skills ?? [];
         const experience = analysis.experience ?? {};
         const positions = experience.positions ?? [];
+        const education = analysis.education ?? [];
 
         return (
           <div
             key={result.id}
-            style={{ border: '1px solid #e5e7eb', borderRadius: '12px', padding: '24px', background: 'rgba(255,255,255,0.4)', backdropFilter: 'blur(8px)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)' }}
+            style={{
+              border: result.isDuplicate ? '2px solid #f59e0b' : '1px solid #e5e7eb',
+              borderRadius: '12px', padding: '24px',
+              background: result.isDuplicate ? 'rgba(255,251,235,0.6)' : 'rgba(255,255,255,0.4)',
+              backdropFilter: 'blur(8px)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+            }}
           >
+
+            {/* Duplicate badge on card */}
+            {result.isDuplicate && (
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px',
+                background: '#fef3c7', color: '#92400e',
+                padding: '4px 10px', borderRadius: '999px',
+                fontSize: '12px', fontWeight: '600', marginBottom: '12px'
+              }}>
+                <AlertTriangle style={{ width: '12px', height: '12px' }} />
+                Already in system — read only
+              </div>
+            )}
 
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '24px' }}>
               <h3 style={{ fontWeight: '600', color: '#1f2937' }}>{result.fileName}</h3>
 
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-
-                {/* Status Badge */}
-                <span style={getStatusStyle(result.decision)}>
-                  {result.decision.toUpperCase()}
-                </span>
-
-                {/* Approve Button */}
-                <button
-                  onClick={() => applyDecision(String(result.id), 'approved')}
-                  style={{ background: '#22c55e', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
-                >
-                  ✓ Approve
-                </button>
-
-                {/* Reject Button */}
-                <button
-                  onClick={() =>
-                    setDecisionModal({
-                      open: true,
-                      candidateId: String(result.id),
-                      decision: 'rejected',
-                    })
-                  }
-                  style={{ background: '#ef4444', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
-                >
-                  ✗ Reject
-                </button>
-
-                {/* KIV Button */}
-                <button
-                  onClick={() => applyDecision(String(result.id), 'kiv')}
-                  style={{ background: '#eab308', color: '#1a1a1a', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
-                >
-                  ⏸ KIV
-                </button>
-
-                {/* Hire Button */}
-                <button
-                  onClick={() => setRecruiterModal({ open: true, candidateId: String(result.id) })}
-                  style={{ background: '#2563eb', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
-                >
-                  ★ Hire
-                </button>
-
-              </div>
+              {/* Only show action buttons for non-duplicates */}
+              {!result.isDuplicate && (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <span style={getStatusStyle(result.decision)}>
+                    {result.decision.toUpperCase()}
+                  </span>
+                  <button
+                    onClick={() => applyDecision(String(result.id), 'approved')}
+                    style={{ background: '#22c55e', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
+                  >
+                    ✓ Approve
+                  </button>
+                  <button
+                    onClick={() => setDecisionModal({ open: true, candidateId: String(result.id), decision: 'rejected' })}
+                    style={{ background: '#ef4444', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
+                  >
+                    ✗ Reject
+                  </button>
+                  <button
+                    onClick={() => applyDecision(String(result.id), 'kiv')}
+                    style={{ background: '#eab308', color: '#1a1a1a', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
+                  >
+                    ⏸ KIV
+                  </button>
+                  <button
+                    onClick={() => setRecruiterModal({ open: true, candidateId: String(result.id) })}
+                    style={{ background: '#2563eb', color: 'white', padding: '6px 16px', borderRadius: '8px', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
+                  >
+                    ★ Hire
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Personal Info */}
@@ -275,10 +322,7 @@ export function ResumeAnalyzer() {
                 <h4 style={{ fontWeight: '600', marginBottom: '8px' }}>Skills</h4>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                   {skills.map((s: any, i: number) => (
-                    <span
-                      key={i}
-                      style={{ padding: '4px 12px', background: '#f3e8ff', color: '#7e22ce', borderRadius: '999px', fontSize: '14px' }}
-                    >
+                    <span key={i} style={{ padding: '4px 12px', background: '#f3e8ff', color: '#7e22ce', borderRadius: '999px', fontSize: '14px' }}>
                       {s.name ?? s}
                     </span>
                   ))}
@@ -286,21 +330,43 @@ export function ResumeAnalyzer() {
               </div>
             )}
 
-            {/* Experience */}
+            {/* Work Experience */}
             {positions.length > 0 && (
               <div style={{ marginBottom: '24px' }}>
                 <h4 style={{ fontWeight: '600', marginBottom: '8px' }}>
                   Work Experience ({experience.totalYears ?? 0} yrs)
                 </h4>
                 {positions.map((pos: any, i: number) => (
-                  <div
-                    key={i}
-                    style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px', marginBottom: '12px', background: 'rgba(255,255,255,0.4)' }}
-                  >
+                  <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px', marginBottom: '12px', background: 'rgba(255,255,255,0.4)' }}>
                     <p style={{ fontWeight: '500' }}>{pos.title}</p>
                     <p style={{ fontSize: '14px', color: '#4b5563' }}>{pos.company}</p>
                     {pos.duration && (
                       <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>{pos.duration}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Education */}
+            {education.length > 0 && (
+              <div style={{ marginBottom: '24px' }}>
+                <h4 style={{ fontWeight: '600', marginBottom: '8px' }}>Education</h4>
+                {education.map((edu: any, i: number) => (
+                  <div key={i} style={{ border: '1px solid #e0e7ff', borderRadius: '8px', padding: '16px', marginBottom: '12px', background: 'rgba(238,242,255,0.4)' }}>
+                    {edu.level && (
+                      <span style={{ display: 'inline-block', background: '#e0e7ff', color: '#3730a3', padding: '2px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', marginBottom: '6px' }}>
+                        {edu.level}
+                      </span>
+                    )}
+                    {edu.institution && (
+                      <p style={{ fontWeight: '500', color: '#1f2937' }}>{edu.institution}</p>
+                    )}
+                    {edu.field && (
+                      <p style={{ fontSize: '14px', color: '#4b5563' }}>{edu.field}</p>
+                    )}
+                    {edu.year && (
+                      <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>{edu.year}</p>
                     )}
                   </div>
                 ))}
@@ -313,15 +379,7 @@ export function ResumeAnalyzer() {
                 Overall Score: {analysis.overallScore ?? 0}%
               </p>
               <div style={{ flex: 1, background: '#e9d5ff', borderRadius: '999px', height: '10px' }}>
-                <div
-                  style={{
-                    width: `${analysis.overallScore ?? 0}%`,
-                    background: '#7c3aed',
-                    height: '10px',
-                    borderRadius: '999px',
-                    transition: 'width 0.3s ease'
-                  }}
-                />
+                <div style={{ width: `${analysis.overallScore ?? 0}%`, background: '#7c3aed', height: '10px', borderRadius: '999px', transition: 'width 0.3s ease' }} />
               </div>
             </div>
 
@@ -333,28 +391,19 @@ export function ResumeAnalyzer() {
       {recruiterModal.open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '16px' }}>
           <div style={{ background: 'white', borderRadius: '12px', padding: '24px', width: '100%', maxWidth: '400px', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
-
-            <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#2563eb', marginBottom: '8px' }}>
-              Select Recruiter
-            </h3>
-            <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '16px' }}>
-              Who is hiring this candidate?
-            </p>
-
+            <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#2563eb', marginBottom: '8px' }}>Select Recruiter</h3>
+            <p style={{ fontSize: '13px', color: '#6b7280', marginBottom: '16px' }}>Who is hiring this candidate?</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
               {RECRUITERS.map(recruiter => (
                 <button
                   key={recruiter}
                   onClick={() => setSelectedRecruiter(recruiter)}
                   style={{
-                    padding: '10px 16px',
-                    borderRadius: '8px',
+                    padding: '10px 16px', borderRadius: '8px',
                     border: selectedRecruiter === recruiter ? '2px solid #2563eb' : '1px solid #d1d5db',
                     background: selectedRecruiter === recruiter ? '#eff6ff' : 'white',
                     color: selectedRecruiter === recruiter ? '#2563eb' : '#374151',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    fontSize: '14px',
+                    cursor: 'pointer', textAlign: 'left', fontSize: '14px',
                     fontWeight: selectedRecruiter === recruiter ? '600' : '400',
                   }}
                 >
@@ -362,13 +411,9 @@ export function ResumeAnalyzer() {
                 </button>
               ))}
             </div>
-
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button
-                onClick={() => {
-                  setRecruiterModal({ open: false, candidateId: null });
-                  setSelectedRecruiter('');
-                }}
+                onClick={() => { setRecruiterModal({ open: false, candidateId: null }); setSelectedRecruiter(''); }}
                 style={{ padding: '8px 16px', borderRadius: '8px', background: '#f3f4f6', color: '#374151', fontSize: '14px', border: 'none', cursor: 'pointer' }}
               >
                 Cancel
@@ -376,20 +421,11 @@ export function ResumeAnalyzer() {
               <button
                 onClick={confirmHire}
                 disabled={!selectedRecruiter}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '8px',
-                  background: selectedRecruiter ? '#2563eb' : '#93c5fd',
-                  color: 'white',
-                  fontSize: '14px',
-                  border: 'none',
-                  cursor: selectedRecruiter ? 'pointer' : 'not-allowed'
-                }}
+                style={{ padding: '8px 16px', borderRadius: '8px', background: selectedRecruiter ? '#2563eb' : '#93c5fd', color: 'white', fontSize: '14px', border: 'none', cursor: selectedRecruiter ? 'pointer' : 'not-allowed' }}
               >
                 Confirm Hire
               </button>
             </div>
-
           </div>
         </div>
       )}
@@ -398,9 +434,7 @@ export function ResumeAnalyzer() {
       {decisionModal.open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: '16px' }}>
           <div style={{ background: 'white', borderRadius: '12px', padding: '24px', width: '100%', maxWidth: '480px', boxShadow: '0 25px 50px rgba(0,0,0,0.3)' }}>
-
             <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#dc2626', marginBottom: '16px' }}>Reject Candidate</h3>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '256px', overflowY: 'auto', marginBottom: '16px' }}>
               {REJECT_REASONS.map(reason => {
                 const checked = selectedReasons.includes(reason.code);
@@ -408,14 +442,10 @@ export function ResumeAnalyzer() {
                   <label
                     key={reason.code}
                     style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: '12px',
-                      padding: '12px',
-                      borderRadius: '8px',
+                      display: 'flex', alignItems: 'flex-start', gap: '12px',
+                      padding: '12px', borderRadius: '8px',
                       border: checked ? '2px solid #f87171' : '1px solid #d1d5db',
-                      background: checked ? '#fef2f2' : 'white',
-                      cursor: 'pointer',
+                      background: checked ? '#fef2f2' : 'white', cursor: 'pointer',
                     }}
                   >
                     <input
@@ -423,50 +453,31 @@ export function ResumeAnalyzer() {
                       checked={checked}
                       onChange={() =>
                         setSelectedReasons(prev =>
-                          prev.includes(reason.code)
-                            ? prev.filter(r => r !== reason.code)
-                            : [...prev, reason.code]
+                          prev.includes(reason.code) ? prev.filter(r => r !== reason.code) : [...prev, reason.code]
                         )
                       }
                       style={{ marginTop: '2px', accentColor: '#dc2626' }}
                     />
-                    <span style={{ fontSize: '14px', color: '#1f2937', lineHeight: '1.4' }}>
-                      {reason.label}
-                    </span>
+                    <span style={{ fontSize: '14px', color: '#1f2937', lineHeight: '1.4' }}>{reason.label}</span>
                   </label>
                 );
               })}
             </div>
-
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
               <button
-                onClick={() => {
-                  setDecisionModal({ open: false, candidateId: null, decision: null });
-                  setSelectedReasons([]);
-                }}
+                onClick={() => { setDecisionModal({ open: false, candidateId: null, decision: null }); setSelectedReasons([]); }}
                 style={{ padding: '8px 16px', borderRadius: '8px', background: '#f3f4f6', color: '#374151', fontSize: '14px', fontWeight: '500', border: 'none', cursor: 'pointer' }}
               >
                 Cancel
               </button>
-
               <button
                 onClick={confirmReject}
                 disabled={selectedReasons.length === 0}
-                style={{
-                  padding: '8px 16px',
-                  borderRadius: '8px',
-                  background: selectedReasons.length > 0 ? '#dc2626' : '#fca5a5',
-                  color: 'white',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  border: 'none',
-                  cursor: selectedReasons.length > 0 ? 'pointer' : 'not-allowed'
-                }}
+                style={{ padding: '8px 16px', borderRadius: '8px', background: selectedReasons.length > 0 ? '#dc2626' : '#fca5a5', color: 'white', fontSize: '14px', fontWeight: '500', border: 'none', cursor: selectedReasons.length > 0 ? 'pointer' : 'not-allowed' }}
               >
                 Confirm Reject
               </button>
             </div>
-
           </div>
         </div>
       )}
@@ -498,7 +509,7 @@ function Info({
   return (
     <div>
       <p style={{ fontSize: '14px', color: '#6b7280' }}>{label}</p>
-      <p style={ clamp ? { overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontSize: '14px', wordBreak: 'break-word' } : {} }>
+      <p style={clamp ? { overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', fontSize: '14px', wordBreak: 'break-word' } : {}}>
         {value || '-'}
       </p>
     </div>

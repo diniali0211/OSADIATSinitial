@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException,Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -18,7 +18,6 @@ from database.crud import create_candidate, update_decision
 from database.models import Candidate, Settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from database.models import Candidate
 from r2_storage import upload_pdf, get_pdf_url
 
 # -------------------------
@@ -34,15 +33,12 @@ async def startup():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-
 )
 
 processor = ATSProcessor()
@@ -52,9 +48,8 @@ processor = ATSProcessor()
 # Constants & Schemas
 # -------------------------
 
-
 VALID_DECISIONS = {
-    "APPROVED","REJECTED","KIV","HIRED","RESIGNED","ABSCONDED"
+    "APPROVED", "REJECTED", "KIV", "HIRED", "RESIGNED", "ABSCONDED"
 }
 
 VALID_REJECT_REASONS = {
@@ -114,12 +109,11 @@ async def analyze_resume(
             pdf_key = None
 
         candidate = await create_candidate(db, {
-
             "name": analysis.get("personalInfo", {}).get("name"),
             "email": analysis.get("personalInfo", {}).get("email"),
             "phone": analysis.get("personalInfo", {}).get("phone"),
-            "location" : analysis.get("personalInfo", {}).get("location"),
-            "score":analysis.get("overallScore", 0),
+            "location": analysis.get("personalInfo", {}).get("location"),
+            "score": analysis.get("overallScore", 0),
             "resume_text": str(analysis),
             "resume_url": pdf_key,
         })
@@ -137,7 +131,8 @@ async def analyze_resume(
             os.remove(temp_path)
 
 
-
+# -------------------------
+# Decision
 # -------------------------
 
 @app.post("/decision")
@@ -150,14 +145,15 @@ async def set_decision(
     if decision not in VALID_DECISIONS:
         raise HTTPException(status_code=400, detail="Invalid decision")
 
-
     if decision == "REJECTED":
         if not payload.reason:
             raise HTTPException(
-                status_code=400,detail="Reject reason required")
+                status_code=400, detail="Reject reason required")
         if payload.reason not in VALID_REJECT_REASONS:
             raise HTTPException(
-                status_code=400,detail={"error": "Invalid reject reason","allowed": list(VALID_REJECT_REASONS)})
+                status_code=400,
+                detail={"error": "Invalid reject reason", "allowed": list(VALID_REJECT_REASONS)}
+            )
 
     updated = await update_decision(
         db,
@@ -176,6 +172,10 @@ async def set_decision(
     }
 
 
+# -------------------------
+# Candidates
+# -------------------------
+
 @app.get("/candidates")
 async def get_candidates(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Candidate))
@@ -185,24 +185,28 @@ async def get_candidates(db: AsyncSession = Depends(get_db)):
 
     for c in candidates:
         formatted.append({
-        "id": c.id,
-        "name": c.name,
-        "email": c.email,
-        "phone": c.phone,
-        "location": c.location,
-        "score": c.score,
-        "status": c.status,
-        "resume_text": c.resume_text,
-        "created_at": c.created_at.isoformat() if c.created_at else None,
-        "abscond_date": c.abscond_date,
-        "resume_url": c.resume_url,
-        "reject_reason": c.reject_reason,
-        "recruiter_name": c.recuiter_name,
-
-      })
+            "id": c.id,
+            "name": c.name,
+            "email": c.email,
+            "phone": c.phone,
+            "location": c.location,
+            "score": c.score,
+            "status": c.status,
+            "resume_text": c.resume_text,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "abscond_date": c.abscond_date,
+            "resume_url": c.resume_url,
+            "reject_reason": c.reject_reason,
+            "recruiter_name": c.recuiter_name,
+            "hired_date": getattr(c, "hired_date", None).isoformat() if getattr(c, "hired_date", None) else None,
+        })
 
     return formatted
 
+
+# -------------------------
+# Resume URL
+# -------------------------
 
 @app.get("/resume-url/{candidate_id}")
 async def get_resume_url(candidate_id: str, db: AsyncSession = Depends(get_db)):
@@ -217,6 +221,10 @@ async def get_resume_url(candidate_id: str, db: AsyncSession = Depends(get_db)):
     url = get_pdf_url(candidate.resume_url)
     return {"url": url}
 
+
+# -------------------------
+# Settings
+# -------------------------
 
 @app.get("/settings")
 async def get_settings(db: AsyncSession = Depends(get_db)):
@@ -258,19 +266,25 @@ async def save_settings(payload: dict, db: AsyncSession = Depends(get_db)):
 
     await db.commit()
     await db.refresh(settings)
-    return {"status":"ok"}
+    return {"status": "ok"}
 
 
+# -------------------------
+# Password Verification
+# -------------------------
 
 class DeletePasswordPayload(BaseModel):
     password: str
 
 @app.post("/verify-delete-password")
-async def verify_delete_password(payload: DeletePasswordPayload, db: AsyncSession = Depends(get_db)):
+async def verify_delete_password(
+    payload: DeletePasswordPayload,
+    db: AsyncSession = Depends(get_db)
+):
     result = await db.execute(select(Settings).where(Settings.id == 1))
     settings = result.scalars().first()
     correct = settings.delete_password if settings else "delete124"
-    if payload.password !=correct:
+    if payload.password != correct:
         raise HTTPException(status_code=401, detail="Invalid Password")
     return {"status": "ok"}
 
@@ -291,16 +305,15 @@ async def login(payload: LoginPayload, db: AsyncSession = Depends(get_db)):
     return {"status": "ok", "message": "Login Successful"}
 
 
+# -------------------------
+# Export CSV
+# -------------------------
+
 @app.get("/export-csv")
 async def export_csv(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Candidate))
     candidates = result.scalars().all()
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["ID","Name","Email","Phone","Location","Score","Status","Reject Reason","Resume URL","Created At","Abscond Date","Hired Date","Recruiter"])
-
-    for c in candidates:
     def fmt_date(d):
         if d is None:
             return ""
@@ -309,14 +322,23 @@ async def export_csv(db: AsyncSession = Depends(get_db)):
         except:
             return str(d)
 
+    output = io.StringIO()
+    writer = csv.writer(output)
     writer.writerow([
-        c.id, c.name, c.email, c.phone, c.location,
-        c.score, c.status, c.reject_reason, c.resume_url,
-        fmt_date(c.created_at),
-        c.abscond_date,
-        fmt_date(getattr(c, "hired_date", None)),
-        c.recuiter_name
+        "ID", "Name", "Email", "Phone", "Location", "Score",
+        "Status", "Reject Reason", "Resume URL",
+        "Created At", "Abscond Date", "Hired Date", "Recruiter"
     ])
+
+    for c in candidates:
+        writer.writerow([
+            c.id, c.name, c.email, c.phone, c.location,
+            c.score, c.status, c.reject_reason, c.resume_url,
+            fmt_date(c.created_at),
+            c.abscond_date,
+            fmt_date(getattr(c, "hired_date", None)),
+            c.recuiter_name
+        ])
 
     output.seek(0)
     return StreamingResponse(
@@ -326,6 +348,10 @@ async def export_csv(db: AsyncSession = Depends(get_db)):
     )
 
 
+# -------------------------
+# Settings Reset
+# -------------------------
+
 @app.post("/settings/reset")
 async def reset_settings(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Settings).where(Settings.id == 1))
@@ -333,7 +359,7 @@ async def reset_settings(db: AsyncSession = Depends(get_db)):
     if not settings:
         return {"status": "ok"}
 
-    settings.company_name = "My company"
+    settings.company_name = "My Company"
     settings.hr_name = ""
     settings.hr_email = ""
     settings.hiring_position = ""
@@ -346,6 +372,10 @@ async def reset_settings(db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"status": "ok"}
 
+
+# -------------------------
+# Delete All Candidates
+# -------------------------
 
 @app.delete("/candidates/all")
 async def delete_all_candidates(db: AsyncSession = Depends(get_db)):

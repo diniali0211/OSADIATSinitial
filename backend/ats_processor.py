@@ -262,13 +262,14 @@ class ATSProcessor:
             "Kuantan", "Kota Bharu", "Kuala Terengganu", "Kangar"
         ]
 
-        # Check for Malaysian postcode → city pattern
+        # Check for Malaysian postcode → state pattern
+        states_pattern = "|".join(re.escape(s) for s in malaysian_states)
         postcode_match = re.search(
-            r"\d{5},?\s*([A-Za-z\s]+),?\s*(' + '|'.join(malaysian_states) + ')",
+            rf"\d{{5}},?\s*[A-Za-z\s]+,?\s*({states_pattern})",
             text, re.I
         )
         if postcode_match:
-            return postcode_match.group(2).strip()
+            return postcode_match.group(1).strip()
 
         # Check for explicit state names
         for state in malaysian_states:

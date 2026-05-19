@@ -30,23 +30,36 @@ class ATSApiService {
   private baseUrl = "https://osadiatsinitial-production.up.railway.app";
 
   async uploadResume(file: File) {
-    const formData = new FormData();
-    formData.append("file", file);
+  const formData = new FormData();
+  formData.append("file", file);
 
-    const res = await fetch(`${this.baseUrl}/analyze`, {
-      method: "POST",
-      body: formData,
-    });
+  const res = await fetch(`${this.baseUrl}/analyze`, {
+    method: "POST",
+    body: formData,
+  });
 
-    if (!res.ok) throw new Error("Upload failed");
+  if (!res.ok) throw new Error("Upload failed");
 
-    const result = await res.json();
-    console.log("Upload result:", result);
+  const result = await res.json();
+  console.log("Upload result:", result);
+
+  // Pass through duplicate detection fields
+  if (result.duplicate) {
     return {
-      resumeId: result.id ?? result.candidate_id,
+      duplicate: true,
+      message: result.message,
+      existing_candidate_id: result.existing_candidate_id,
       analysis: result.analysis,
+      resumeId: result.existing_candidate_id,
     };
   }
+
+  return {
+    duplicate: false,
+    resumeId: result.id ?? result.candidate_id,
+    analysis: result.analysis,
+  };
+}
 
   async getAllResumes(): Promise<any[]> {
     const res = await fetch(`${this.baseUrl}/candidates`);

@@ -546,6 +546,95 @@ class ATSProcessor:
 
         return text
 
+    def extract_education(self, text):
+        lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+        start_keywords = re.compile(
+            r"(education|educational background|academic|qualification|sijil|diploma|degree|spm|stpm|upsr|pt3)",
+            re.I
+        )
+        end_keywords = re.compile(
+            r"(employment|work experience|experience|skills|certification|projects|references|personal particulars)",
+            re.I
+        )
+
+        start = None
+        end = None
+
+        for idx, line in enumerate(lines):
+            if start is None and start_keywords.search(line):
+                start = idx + 1
+            elif start is not None and end_keywords.search(line):
+                end = idx
+                break
+
+        if start is None:
+            return []
+
+        section = lines[start:end] if end else lines[start:start + 20]
+
+        qualifications = []
+
+        # Known qualification keywords
+        qual_keywords = re.compile(
+            r"(phd|degree|bachelor|master|diploma|certificate|sijil|spm|stpm|upsr|pt3|igcse|a.level|o.level|lcci|svm|skm|skkm|dkm|dkkm)",
+            re.I
+        )
+
+        # Year pattern
+        year_pattern = re.compile(r"\b(19|20)\d{2}\b")
+
+        i = 0
+        while i < len(section):
+            line = section[i]
+
+            # Look for qualification level
+            qual_match = qual_keywords.search(line)
+            year_match = year_pattern.search(line)
+
+            if qual_match or year_match:
+                qualification = {
+                    "level": qual_match.group(0).upper() if qual_match else "",
+                    "institution": "",
+                    "field": "",
+                    "year": year_match.group(0) if year_match else "",
+                }
+
+                # Look at surrounding lines for institution and field
+                context_lines = section[max(0, i-1):min(len(section), i+3)]
+                for ctx in context_lines:
+                    # Institution usually contains school/college/university keywords
+                    if re.search(r"(university|universiti|college|kolej|school|sekolah|institut|polytechnic|politeknik)", ctx, re.I):
+                        qualification["institution"] = ctx.strip()
+                    # Field/major
+                    elif re.search(r"(engineering|science|business|arts|technology|management|accounting|elektrik|mekanikal|computer|it)", ctx, re.I):
+                        qualification["field"] = ctx.strip()
+
+                # If institution still empty, use next line
+                if not qualification["institution"] and i + 1 < len(section):
+                    next_line = section[i + 1]
+                    if not qual_keywords.search(next_line) and len(next_line) > 5:
+                        qualification["institution"] = next_line.strip()
+
+                qualifications.append(qualification)
+                i += 2
+                continue
+
+            # Also catch lines with school/college names even without qual keyword
+            if re.search(r"(university|universiti|college|kolej|sekolah|institut|polytechnic|politeknik)", line, re.I):
+                if not any(q["institution"] == line.strip() for q in qualifications):
+                    year_m = year_pattern.search(line)
+                    qualifications.append({
+                        "level": "",
+                        "institution": line.strip(),
+                        "field": "",
+                        "year": year_m.group(0) if year_m else "",
+                    })
+
+            i += 1
+
+        return qualifications
+
     def analyze_resume(self, file_path):
         print("🔥 ATS RUNNING 🔥")
 
@@ -570,6 +659,7 @@ class ATSProcessor:
         personal_info = self.extract_personal_info(text)
         skills = self.extract_skills(text)
         experience = self.extract_experience(text)
+        education = self.extract_education(text)
         job_match = self.calculate_job_match(skills)
 
         overall = min(
@@ -584,6 +674,7 @@ class ATSProcessor:
             "personalInfo": personal_info,
             "skills": skills,
             "experience": experience,
+            "education": education,
             "jobMatch": job_match,
             "analysisDate": datetime.now().isoformat(),
             "language": lang,

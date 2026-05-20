@@ -86,23 +86,34 @@ class ATSProcessor:
         pages = []
 
         for page in doc:
-            # High DPI for better accuracy
             pix = page.get_pixmap(dpi=300)
             img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
 
-            # Enhance contrast and sharpness for better OCR
             img = ImageEnhance.Contrast(img).enhance(2.0)
             img = ImageEnhance.Sharpness(img).enhance(2.0)
             img = img.filter(ImageFilter.SHARPEN)
 
-            # PSM 6 = uniform block of text (best for resumes)
-            text = pytesseract.image_to_string(
-                img,
-                lang="eng+msa",
-                config="--oem 3 --psm 6"
+            w, h = img.size
+            left_half = img.crop((0, 0, w // 2, h))
+            right_half = img.crop((w // 2, 0, w, h))
+
+            left_text = pytesseract.image_to_string(
+                left_half, lang="eng+msa", config="--oem 3 --psm 6"
+            )
+            right_text = pytesseract.image_to_string(
+                right_half, lang="eng+msa", config="--oem 3 --psm 6"
             )
 
-            pages.append(text)
+            if len(left_text.strip()) > 50 and len(right_text.strip()) > 50:
+                # Two-column layout: right column has main content (work/edu)
+                # left column has name/contact/skills
+                combined = right_text.strip() + "\n\n" + left_text.strip()
+            else:
+                combined = pytesseract.image_to_string(
+                    img, lang="eng+msa", config="--oem 3 --psm 6"
+                )
+
+            pages.append(combined)
 
         return "\n".join(pages)
 

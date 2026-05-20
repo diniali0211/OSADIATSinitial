@@ -81,6 +81,46 @@ class ATSProcessor:
 
         return text.strip()
 
+    def is_two_column(self, img) -> bool:
+        """
+        Detect two-column layout by analyzing pixel darkness distribution.
+        A dark sidebar (like a coloured left panel) will have significantly
+        darker average pixels on one side.
+        """
+        import numpy as np
+        w, h = img.size
+        arr = np.array(img)
+
+        left_mean = arr[:, :w//2].mean()
+        right_mean = arr[:, w//2:].mean()
+
+        # If one half is significantly darker than the other → sidebar layout
+        darkness_diff = abs(float(left_mean) - float(right_mean))
+
+        # Also check text density: OCR each half and compare word counts
+        left_half = img.crop((0, 0, w // 2, h))
+        right_half = img.crop((w // 2, 0, w, h))
+
+        left_text = pytesseract.image_to_string(
+            left_half, lang="eng+msa", config="--oem 3 --psm 6"
+        )
+        right_text = pytesseract.image_to_string(
+            right_half, lang="eng+msa", config="--oem 3 --psm 6"
+        )
+
+        left_words = len(left_text.split())
+        right_words = len(right_text.split())
+
+        # Two-column if:
+        # 1. Both sides have substantial text (>30 words each), AND
+        # 2. There is a significant darkness difference (sidebar) OR
+        #    the word count ratio is fairly balanced (40-60% split)
+        both_have_text = left_words > 30 and right_words > 30
+        has_sidebar = darkness_diff > 20
+        balanced_ratio = 0.25 < (left_words / max(left_words + right_words, 1)) < 0.75
+
+        return both_have_text and (has_sidebar or balanced_ratio), left_text, right_text
+
     def extract_text_with_ocr(self, path):
         doc = fitz.open(path)
         pages = []
@@ -93,22 +133,22 @@ class ATSProcessor:
             img = ImageEnhance.Sharpness(img).enhance(2.0)
             img = img.filter(ImageFilter.SHARPEN)
 
-            w, h = img.size
-            left_half = img.crop((0, 0, w // 2, h))
-            right_half = img.crop((w // 2, 0, w, h))
+            try:
+                import numpy as np
+                two_col, left_text, right_text = self.is_two_column(img)
+            except Exception:
+                two_col = False
+                left_text = ""
+                right_text = ""
 
-            left_text = pytesseract.image_to_string(
-                left_half, lang="eng+msa", config="--oem 3 --psm 6"
-            )
-            right_text = pytesseract.image_to_string(
-                right_half, lang="eng+msa", config="--oem 3 --psm 6"
-            )
-
-            if len(left_text.strip()) > 50 and len(right_text.strip()) > 50:
-                # Two-column layout: right column has main content (work/edu)
-                # left column has name/contact/skills
+            if two_col:
+                # Two-column layout: right column first (education/work),
+                # then left column (name/contact/skills)
+                print("Two-column layout detected")
                 combined = right_text.strip() + "\n\n" + left_text.strip()
             else:
+                # Single column — full page OCR
+                print("Single column layout detected")
                 combined = pytesseract.image_to_string(
                     img, lang="eng+msa", config="--oem 3 --psm 6"
                 )

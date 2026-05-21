@@ -4,7 +4,7 @@ import fitz
 import pdfplumber
 import pytesseract
 import io
-from PIL import Image, ImageFilter, ImageEnhance 
+from PIL import Image, ImageFilter, ImageEnhance
 import docx2txt
 import spacy
 from keybert import KeyBERT

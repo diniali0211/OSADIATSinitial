@@ -131,10 +131,10 @@ class ATSProcessor:
                 right_text = ""
 
             if two_col:
-                # Two-column layout: right column first (education/work),
-                # then left column (name/contact/skills)
+                # Two-column layout: put LEFT column FIRST so name is found early,
+                # then right column for work experience / education
                 print("Two-column layout detected")
-                combined = right_text.strip() + "\n\n" + left_text.strip()
+                combined = left_text.strip() + "\n\n" + right_text.strip()
             else:
                 # Single column — full page OCR
                 print("Single column layout detected")
@@ -166,7 +166,7 @@ class ATSProcessor:
             elif tesseract_available and len(pdf_text.strip()) >= 100:
                 try:
                     ocr_text = self.extract_text_with_ocr(file_path)
-                    if len(ocr_text.strip()) > len(pdf_text.strip()) * 1.3:
+                    if len(ocr_text.strip()) > len(pdf_text.strip()) * 1.05:
                         return ocr_text
                 except Exception as e:
                     print(f"OCR failed: {e}")
@@ -239,7 +239,7 @@ class ATSProcessor:
 
         best_candidate = None
 
-        for line in lines[:40]:
+        for line in lines[:80]:
             lower = line.lower().strip()
             words = line.split()
 

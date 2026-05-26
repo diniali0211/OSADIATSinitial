@@ -7,8 +7,6 @@ import io
 from PIL import Image, ImageFilter, ImageEnhance
 import docx2txt
 import spacy
-from keybert import KeyBERT
-from transformers import AutoTokenizer, AutoModel
 from datetime import datetime
 from langdetect import detect
 import shutil
@@ -32,15 +30,6 @@ class ATSProcessor:
             self.nlp = spacy.load("en_core_web_sm")
         except:
             self.nlp = None
-
-        self.kw_model = KeyBERT()
-
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "sentence-transformers/all-MiniLM-L6-v2"
-        )
-        self.model = AutoModel.from_pretrained(
-            "sentence-transformers/all-MiniLM-L6-v2"
-        )
 
         self.skill_patterns = {
             "programming": [
@@ -194,17 +183,16 @@ class ATSProcessor:
     # -----------------------------
 
     def extract_name(self, text):
-        # Common Malaysian name prefixes and first names (male & female)
-        malay_male_prefixes = [
+        malay_strong_prefixes = [
             "muhammad", "mohd", "mohamad", "mohammad", "mohamed",
-            "muhamad", "md", "m.", "ahmad", "ahmed", "abdul", "abd",
-            "abu", "al", "wan", "nik", "tengku", "tunku", "raja",
-            "megat", "syed", "che", "mat", "zul", "nor", "noor",
+            "muhamad", "ahmad", "ahmed", "abdul", "abd", "abu",
+            "wan", "nik", "tengku", "tunku", "raja", "megat", "syed",
+            "nur", "nurul", "siti", "sharifah", "fatimah",
         ]
-        malay_female_prefixes = [
-            "nur", "nurul", "nur", "siti", "sharifah", "faridah",
-            "noraini", "norhaida", "norizan", "norazah", "azizah",
-            "fatimah", "fauziah", "rohani", "zainab", "maimunah",
+        malay_weak_prefixes = [
+            "md", "al", "che", "mat", "zul", "nor", "noor",
+            "faridah", "noraini", "norhaida", "norizan", "norazah",
+            "azizah", "fauziah", "rohani", "zainab", "maimunah",
             "habibah", "mariam", "khadijah", "ainul", "amirah",
         ]
         chinese_prefixes = [
@@ -216,59 +204,81 @@ class ATSProcessor:
             "a/l", "a/p", "s/o", "d/o", "rajah", "kumar", "krishnan",
             "suresh", "ramesh", "ganesh", "vijay", "rajan", "muthu",
             "selvam", "arumugam", "suppiah", "naidu", "pillai",
-            "a/l", "a/p", "munusamy", "govindasamy", "balakrishnan",
+            "munusamy", "govindasamy", "balakrishnan",
         ]
 
         all_prefixes = (
-            malay_male_prefixes
-            + malay_female_prefixes
-            + chinese_prefixes
-            + indian_prefixes
+            malay_strong_prefixes + malay_weak_prefixes
+            + chinese_prefixes + indian_prefixes
         )
 
-        skip_keywords = [
+        # Words that should NEVER appear in a name line
+        hard_skip = [
             "resume", "curriculum", "vitae", "contact", "address",
             "email", "phone", "mobile", "ic no", "gender", "age",
             "nationality", "date", "birth", "status", "particulars",
             "information", "background", "education", "experience",
-            "employment", "history", "skills", "reference",
-            "objective", "summary", "profile", "personal",
-            "pulau", "pinang", "selangor", "kuala", "lumpur",
-            "malaysia", "bayan", "lepas", "sungai", "jalan",
+            "employment", "history", "skills", "reference", "objective",
+            "summary", "profile", "personal", "pulau", "pinang",
+            "selangor", "kuala", "lumpur", "malaysia", "bayan", "lepas",
+            "sungai", "jalan", "understanding", "committed", "technical",
+            "hardworking", "disciplined", "motivated", "responsible",
+            "able", "follow", "operate", "maintain", "machine", "operator",
+            "about", "profil", "objective", "bahasa", "language",
+            "religion", "islam", "male", "female", "gender",
         ]
 
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
-        for line in lines[:30]:
+        best_candidate = None
+
+        for line in lines[:40]:
             lower = line.lower().strip()
             words = line.split()
 
-            # Skip if too short, too long, has digits, or has special chars
+            # Basic filters
             if len(words) < 2 or len(words) > 8:
                 continue
             if any(char.isdigit() for char in line):
                 continue
-            if any(c in line for c in ["@", ":", "/", "\\", "(", ")"]):
+            if any(c in line for c in ["@", ":", "/", "(", ")", "*", "•", "★", "►"]):
                 continue
-            if any(kw in lower for kw in skip_keywords):
+            if any(kw in lower for kw in hard_skip):
+                continue
+            # Must be mostly alphabetic
+            alpha_ratio = sum(c.isalpha() or c == " " for c in line) / max(len(line), 1)
+            if alpha_ratio < 0.85:
                 continue
 
-            # Check if line starts with a known Malaysian name prefix
             first_word = words[0].lower().rstrip(".")
-            if first_word in all_prefixes:
-                # Clean and return — strip trailing noise words
+
+            # Strong prefix match — high confidence, return immediately
+            if first_word in malay_strong_prefixes + indian_prefixes:
                 name = " ".join(words)
-                # Remove trailing single letters or OCR noise
                 name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
                 return name.title()
 
-            # Also check if ANY word in line is a strong prefix
+            # Weak prefix match — keep as candidate, continue looking
+            if first_word in malay_weak_prefixes + chinese_prefixes:
+                if best_candidate is None:
+                    best_candidate = line.title()
+                continue
+
+            # Check if strong prefix appears ANYWHERE in line (multiword OCR noise)
             for word in words:
                 w = word.lower().rstrip(".")
-                if w in malay_male_prefixes + malay_female_prefixes:
-                    name = " ".join(words)
-                    name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
-                    return name.title()
+                if w in malay_strong_prefixes:
+                    # Make sure the prefix word is not preceded by noise words
+                    idx = words.index(word)
+                    # Allow at most 1 word before the prefix (OCR noise)
+                    if idx <= 1:
+                        name = " ".join(words[idx:])
+                        name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
+                        if len(name.split()) >= 2:
+                            return name.title()
+
+        if best_candidate:
+            return best_candidate
 
         # Fallback: spaCy NER
         if self.nlp:
@@ -276,7 +286,7 @@ class ATSProcessor:
             for ent in doc.ents:
                 if ent.label_ == "PERSON" and len(ent.text.split()) >= 2:
                     lower = ent.text.lower()
-                    if not any(kw in lower for kw in skip_keywords):
+                    if not any(kw in lower for kw in hard_skip):
                         return ent.text.title()
 
         return None

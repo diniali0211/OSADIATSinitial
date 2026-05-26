@@ -179,693 +179,241 @@ class ATSProcessor:
         raise ValueError("Unsupported file type")
 
     # -----------------------------
-    # INFORMATION EXTRACTION
+    # LLM-BASED EXTRACTION (Claude Haiku)
     # -----------------------------
 
-    def extract_name(self, text):
+    def extract_with_llm(self, text: str) -> dict:
+        """
+        Use Claude Haiku to extract all resume fields in one API call.
+        Falls back to regex extraction if API call fails.
+        """
+        import os
+        import json
+        import requests
+
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            print("No ANTHROPIC_API_KEY found, falling back to regex")
+            return None
+
+        prompt = f"""Extract information from this resume text and return ONLY valid JSON with no explanation, no markdown, no backticks.
+
+Resume text:
+{text[:4000]}
+
+Return this exact JSON structure:
+{{
+  "name": "full name or null",
+  "email": "email or null",
+  "phone": "phone number or null",
+  "location": "city or state or null",
+  "experience": {{
+    "totalYears": 0,
+    "positions": [
+      {{"title": "job title", "company": "company name", "duration": "date range"}}
+    ]
+  }},
+  "education": [
+    {{"level": "SPM/Diploma/Degree/etc", "institution": "school name", "field": "subject or null", "year": "year or range"}}
+  ]
+}}
+
+Rules:
+- name: full name only, no job titles or addresses
+- phone: Malaysian format preferred (01X-XXXXXXXX)
+- location: city or state only (e.g. Pulau Pinang, Bayan Lepas)
+- totalYears: calculate from work history
+- If field is unknown return null
+- Return ONLY the JSON object"""
+
+        try:
+            response = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 1024,
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                print(f"API error: {response.status_code} {response.text}")
+                return None
+
+            result = response.json()
+            raw = result["content"][0]["text"].strip()
+
+            # Strip any accidental markdown fences
+            raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE).strip()
+
+            parsed = json.loads(raw)
+            print("LLM extraction successful")
+            return parsed
+
+        except Exception as e:
+            print(f"LLM extraction failed: {e}")
+            return None
+
+    # -----------------------------
+    # FALLBACK REGEX EXTRACTION
+    # -----------------------------
+
+    def extract_name_regex(self, text):
         malay_strong_prefixes = [
             "muhammad", "mohd", "mohamad", "mohammad", "mohamed",
             "muhamad", "ahmad", "ahmed", "abdul", "abd", "abu",
             "wan", "nik", "tengku", "tunku", "raja", "megat", "syed",
             "nur", "nurul", "siti", "sharifah", "fatimah",
         ]
-        malay_weak_prefixes = [
-            "md", "al", "che", "mat", "zul", "nor", "noor",
-            "faridah", "noraini", "norhaida", "norizan", "norazah",
-            "azizah", "fauziah", "rohani", "zainab", "maimunah",
-            "habibah", "mariam", "khadijah", "ainul", "amirah",
-        ]
-        chinese_prefixes = [
-            "tan", "lim", "lee", "ng", "chan", "wong", "koh", "goh",
-            "cheah", "yeoh", "ooi", "yap", "chong", "teh", "low",
-            "ong", "foo", "sim", "loh", "chin", "heng", "kong",
-        ]
-        indian_prefixes = [
-            "a/l", "a/p", "s/o", "d/o", "rajah", "kumar", "krishnan",
-            "suresh", "ramesh", "ganesh", "vijay", "rajan", "muthu",
-            "selvam", "arumugam", "suppiah", "naidu", "pillai",
-            "munusamy", "govindasamy", "balakrishnan",
-        ]
-
-        all_prefixes = (
-            malay_strong_prefixes + malay_weak_prefixes
-            + chinese_prefixes + indian_prefixes
-        )
-
-        # Words that should NEVER appear in a name line
-        hard_skip = [
-            "resume", "curriculum", "vitae", "contact", "address",
-            "email", "phone", "mobile", "ic no", "gender", "age",
-            "nationality", "date", "birth", "status", "particulars",
-            "information", "background", "education", "experience",
-            "employment", "history", "skills", "reference", "objective",
-            "summary", "profile", "personal", "pulau", "pinang",
-            "selangor", "kuala", "lumpur", "malaysia", "bayan", "lepas",
-            "sungai", "jalan", "understanding", "committed", "technical",
-            "hardworking", "disciplined", "motivated", "responsible",
-            "able", "follow", "operate", "maintain", "machine", "operator",
-            "about", "profil", "objective", "bahasa", "language",
-            "religion", "islam", "male", "female", "gender",
-            # location noise
-            "sg", "ara", "arc", "dkt", "mukim", "lorong", "taman",
-            "nibong", "besar", "kecil", "lama", "baru", "dalam",
-            # document noise
-            "machines", "operator", "phone", "e-mail", "address",
-            "dob", "february", "january", "march", "april", "june",
-            "july", "august", "september", "october", "november", "december",
-        ]
-
         lines = [l.strip() for l in text.split("\n") if l.strip()]
-
-        best_candidate = None
-
-        for line in lines[:80]:
-            lower = line.lower().strip()
+        for line in lines[:30]:
             words = line.split()
-
-            # Basic filters
             if len(words) < 2 or len(words) > 8:
                 continue
             if any(char.isdigit() for char in line):
                 continue
-            if any(c in line for c in ["@", ":", "/", "(", ")", "*", "•", "★", "►"]):
+            if any(c in line for c in ["@", ":", "/"]):
                 continue
-            if any(kw in lower for kw in hard_skip):
-                continue
-            # Must be mostly alphabetic
-            alpha_ratio = sum(c.isalpha() or c == " " for c in line) / max(len(line), 1)
-            if alpha_ratio < 0.85:
-                continue
-
-            # Each word must be at least 2 chars (filters "Sg", "D.", etc.)
-            if any(len(w.strip(".")) < 2 for w in words):
-                continue
-
-            first_word = words[0].lower().rstrip(".")
-
-            # Strong prefix match — high confidence
-            if first_word in malay_strong_prefixes + indian_prefixes:
-                name_words = list(words)
-                # If only 1 word (e.g. "MUHAMMAD" alone), collect next lines
-                if len(name_words) == 1:
-                    line_idx = lines.index(line) if line in lines else -1
-                    if line_idx >= 0:
-                        for next_line in lines[line_idx+1:line_idx+5]:
-                            nl = next_line.strip()
-                            # Stop if we hit a section header or noise
-                            if any(kw in nl.lower() for kw in hard_skip):
-                                break
-                            if any(c in nl for c in ["@", ":", "/"]):
-                                break
-                            if any(char.isdigit() for char in nl):
-                                break
-                            if len(nl.split()) > 4:
-                                break
-                            alpha_r = sum(c.isalpha() or c == " " for c in nl) / max(len(nl), 1)
-                            if alpha_r < 0.85:
-                                break
-                            name_words.extend(nl.split())
-                            if len(name_words) >= 4:
-                                break
-                name = " ".join(name_words)
-                name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
-                if len(name.split()) >= 2:
-                    return name.title()
-
-            # Weak prefix match — keep as candidate, continue looking
-            if first_word in malay_weak_prefixes + chinese_prefixes:
-                if best_candidate is None:
-                    best_candidate = line.title()
-                continue
-
-            # Check if strong prefix appears ANYWHERE in line (multiword OCR noise)
-            for word in words:
-                w = word.lower().rstrip(".")
-                if w in malay_strong_prefixes:
-                    idx = words.index(word)
-                    # Allow at most 1 word before the prefix (OCR noise)
-                    if idx <= 1:
-                        name = " ".join(words[idx:])
-                        name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
-                        if len(name.split()) >= 2:
-                            return name.title()
-
-            # All-caps full name detection (e.g. dark header banners)
-            # e.g. "MUHAMMAD SHARIZZAN BIN KAMIL"
-            if line == line.upper() and len(words) >= 3:
-                has_prefix = any(w.lower() in malay_strong_prefixes for w in words)
-                if has_prefix:
-                    return line.title()
-
-        if best_candidate:
-            return best_candidate
-
-        # Fallback: spaCy NER
+            first = words[0].lower().rstrip(".")
+            if first in malay_strong_prefixes:
+                return line.title()
         if self.nlp:
-            doc = self.nlp(text[:2000])
+            doc = self.nlp(text[:1500])
             for ent in doc.ents:
                 if ent.label_ == "PERSON" and len(ent.text.split()) >= 2:
-                    lower = ent.text.lower()
-                    if not any(kw in lower for kw in hard_skip):
-                        return ent.text.title()
-
+                    return ent.text.title()
         return None
 
-    def extract_email(self, text):
-        """
-        Extract email with OCR correction for common misreads.
-        OCR often misreads @ as 'a', '0' as 'o', etc.
-        """
-        # Standard email pattern
-        email_match = re.search(
-            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-            text
-        )
-        if email_match:
-            return email_match.group()
+    def extract_email_regex(self, text):
+        m = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+        return m.group() if m else None
 
-        # OCR sometimes reads @ as '(a)' or 'a)' or '@' with spaces
-        # Try to find email-like patterns with OCR noise
-        ocr_email = re.search(
-            r"[A-Za-z0-9._%+-]+\s*[\(@]\s*[A-Za-z0-9.-]+\s*\.\s*[A-Za-z]{2,}",
-            text
-        )
-        if ocr_email:
-            # Clean it up
-            raw = ocr_email.group()
-            raw = re.sub(r"\s+", "", raw)
-            raw = raw.replace("(a)", "@").replace("(A)", "@")
-            if "@" in raw:
-                return raw
+    def extract_phone_regex(self, text):
+        m = re.search(r"(\+?60|0)1[0-9][\s\-]?[0-9]{7,8}", text)
+        if m:
+            return re.sub(r"[^\d+]", "", m.group())
+        m = re.search(r"\+?\d[\d\s\-]{9,14}", text)
+        return re.sub(r"[^\d+]", "", m.group()) if m else None
 
-        # Look for lines containing common email domains
-        for line in text.split("\n"):
-            lower = line.lower()
-            if any(domain in lower for domain in ["gmail", "yahoo", "hotmail", "outlook"]):
-                # Try to reconstruct email from this line
-                cleaned = re.sub(r"\s+", "", line)
-                match = re.search(
-                    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-                    cleaned
-                )
-                if match:
-                    return match.group()
-
-        return None
-
-    def extract_phone(self, text):
-        """
-        Extract phone number with OCR correction.
-        Malaysian numbers: 01X-XXXXXXXX or +601X-XXXXXXXX
-        """
-        # Standard Malaysian phone patterns
-        patterns = [
-            r"(\+?60|0)1[0-9][\s\-]?[0-9]{7,8}",   # 01X-XXXXXXX
-            r"(\+?60|0)1[0-9][0-9]{7,8}",             # 01XXXXXXXXX
-            r"\+?\d[\d\s\-]{9,14}",                    # Generic fallback
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                # Clean up the number
-                phone = match.group()
-                phone = re.sub(r"[^\d+]", "", phone)  # keep only digits and +
-                return phone
-
-        return None
-
-    def extract_location(self, text):
-        """
-        Extract location preferring Malaysian states/cities over street names.
-        """
-        malaysian_states = [
-            "Pulau Pinang", "Penang", "Selangor", "Johor", "Kedah",
-            "Perak", "Sabah", "Sarawak", "Melaka", "Pahang",
-            "Terengganu", "Kelantan", "Negeri Sembilan", "Perlis",
-            "Putrajaya", "Kuala Lumpur", "KL", "Labuan"
-        ]
-
-        malaysian_cities = [
-            "Bayan Lepas", "George Town", "Butterworth", "Petaling Jaya",
-            "Shah Alam", "Subang", "Klang", "Johor Bahru", "Ipoh",
-            "Kuching", "Kota Kinabalu", "Alor Setar", "Seremban",
-            "Kuantan", "Kota Bharu", "Kuala Terengganu", "Kangar"
-        ]
-
-        # Check for Malaysian postcode → state pattern
-        states_pattern = "|".join(re.escape(s) for s in malaysian_states)
-        postcode_match = re.search(
-            rf"\d{{5}},?\s*[A-Za-z\s]+,?\s*({states_pattern})",
-            text, re.I
-        )
-        if postcode_match:
-            return postcode_match.group(1).strip()
-
-        # Check for explicit state names
-        for state in malaysian_states:
-            if re.search(rf"\b{re.escape(state)}\b", text, re.I):
-                return state
-
-        # Check for city names
-        for city in malaysian_cities:
-            if re.search(rf"\b{re.escape(city)}\b", text, re.I):
-                return city
-
-        # Fallback to spaCy
+    def extract_location_regex(self, text):
+        states = ["Pulau Pinang", "Penang", "Selangor", "Johor", "Kedah",
+                  "Perak", "Sabah", "Sarawak", "Melaka", "Pahang",
+                  "Kuala Lumpur", "Negeri Sembilan", "Perlis", "Terengganu",
+                  "Kelantan", "Putrajaya", "Labuan"]
+        for s in states:
+            if re.search(rf"\b{re.escape(s)}\b", text, re.I):
+                return s
         if self.nlp:
-            blacklist = {
-                "residence", "road", "street", "jalan", "apartment",
-                "idaman", "seroja", "lilitan", "taman", "lorong"
-            }
-            doc = self.nlp(text[:1200])
+            doc = self.nlp(text[:800])
             for ent in doc.ents:
-                if ent.label_ in ["GPE", "LOC"]:
-                    if ent.text.lower() not in blacklist and len(ent.text) < 40:
-                        return ent.text
-
+                if ent.label_ in ["GPE", "LOC"] and len(ent.text) < 40:
+                    return ent.text
         return None
-
-    def extract_personal_info(self, text):
-        info = {
-            "name": self.extract_name(text),
-            "email": self.extract_email(text),
-            "phone": self.extract_phone(text),
-            "location": self.extract_location(text),
-        }
-        return info
 
     def extract_skills(self, text):
         found = []
         lower = text.lower()
-
         for cat, skills in self.skill_patterns.items():
             for s in skills:
                 if s in lower:
                     found.append({"name": s, "category": cat})
-
         return found
 
-    def extract_experience(self, text):
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-
-        # Section header keywords
-        start_keywords = re.compile(
-            r"(work experience|employment history|professional experience|employment|experience|work history)",
-            re.I
-        )
-        end_keywords = re.compile(
-            r"(education|skills|certification|projects|references|personal particulars|educational)",
-            re.I
-        )
-
-        start = None
-        end = None
-
-        for idx, line in enumerate(lines):
-            if start is None and start_keywords.search(line):
-                start = idx + 1
-            elif start is not None and end_keywords.search(line):
-                end = idx
-                break
-
-        if start is None:
-            return {"totalYears": 0, "positions": []}
-
-        section = lines[start:end] if end else lines[start:]
-
-        positions = []
-        durations = []
-
-        # Month names for date detection
-        month_pattern = r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)"
-        date_pattern = re.compile(
-            rf"{month_pattern}[a-z]*\.?\s*\d{{4}}\s*[-–to]+\s*({month_pattern}[a-z]*\.?\s*\d{{4}}|Present|present|NOW|now|current)",
-            re.I
-        )
-
-        # Also match year-only ranges like "2018 - 2020"
-        year_range_pattern = re.compile(r"\d{4}\s*[-–]\s*(\d{4}|Present|present)", re.I)
-
-        # Noise patterns to skip in experience section
-        exp_noise = re.compile(
-            r"(ic number|ic no|nric|reference|rujukan|"
-            r"unit manager|tel :|get self|development and motivation|"
-            r"verify material|return extra material|issue in.out|work order|"
-            r"keep in system|handle shipment|provide good|clean food|"
-            r"chee chong|t\.leong|religion|gender|nationality)",
-            re.I
-        )
-
-        i = 0
-        while i < len(section):
-            line = section[i]
-
-            # Skip garbage/noise lines
-            if exp_noise.search(line):
-                i += 1
-                continue
-            if re.match(r"^(@ |IC |Tel|Phone|\d{6,})", line.strip()):
-                i += 1
-                continue
-
-            # Try to find company name (bold/capitalized lines or lines with Sdn Bhd etc)
-            is_company = bool(re.search(
-                r"(sdn\.?\s*bhd|berhad|sdn|bhd|llc|ltd|pte|corp|inc|enterprise|industries|manufacturing|services|solution|technology|group)",
-                line, re.I
-            ))
-
-            # Detect "TITLE    July 2023-April 2025" pattern (title + date on same line)
-            inline_date_match = re.match(
-                r"^([A-Z][A-Za-z/\s]+?)\s{2,}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)[a-z]*\.?\s*\d{4}.+)",
-                line
-            )
-
-            # Look for job title - company pattern: "Title – Company" or "Title at Company"
-            header_match = re.match(r"(.+?)\s*[–\-]\s*(.+)", line)
-
-            if inline_date_match:
-                # Format: "OPERATOR/MACHINES    July 2023-April 2025"
-                title = inline_date_match.group(1).strip()
-                duration = inline_date_match.group(2).strip()
-                # Company is on the next line
-                company = section[i+1].strip() if i+1 < len(section) else ""
-                # Skip if company line looks like noise
-                if exp_noise.search(company) or re.match(r"^(@|IC |Tel|Phone|\d{6,})", company):
-                    company = ""
-                positions.append({
-                    "title": title or "Unknown Role",
-                    "company": company,
-                    "duration": duration,
-                })
-                durations.append(duration)
-                i += 2
-                continue
-
-            if is_company or header_match:
-                company = line if is_company else (header_match.group(2).strip() if header_match else "")
-                title = header_match.group(1).strip() if header_match else ""
-
-                # Look ahead for date and title/position
-                lookahead = " ".join(section[i:min(i + 5, len(section))])
-
-                # Try to find date range
-                date_match = date_pattern.search(lookahead)
-                if not date_match:
-                    date_match = year_range_pattern.search(lookahead)
-
-                duration = date_match.group(0) if date_match else ""
-
-                # Try to find position if not already found
-                if not title:
-                    for j in range(i + 1, min(i + 4, len(section))):
-                        pos_match = re.search(r"(position|role|jawatan)\s*[:\-]?\s*(.+)", section[j], re.I)
-                        if pos_match:
-                            title = pos_match.group(2).strip()
-                            break
-
-                if company:
-                    positions.append({
-                        "title": title or "Unknown Role",
-                        "company": company,
-                        "duration": duration,
-                    })
-                    durations.append(duration)
-                    i += 2
-                    continue
-
-            # Match "Position : Technical Operator 1" style
-            pos_label_match = re.match(r"position\s*[:\-]\s*(.+)", line, re.I)
-            if pos_label_match and positions:
-                positions[-1]["title"] = pos_label_match.group(1).strip()
-
-            # Match "Period : 29 OCTOBER 2018 – 1 JUN 2020" style
-            period_match = re.match(r"period\s*[:\-]\s*(.+)", line, re.I)
-            if period_match:
-                duration_text = period_match.group(1).strip()
-                years = re.findall(r"\d{4}", duration_text)
-                if years and positions:
-                    positions[-1]["duration"] = duration_text
-                    durations[-1] = duration_text if durations else duration_text
-
-            i += 1
-
-        # Calculate total years
-        total = 0
-        for r in durations:
-            years = re.findall(r"\d{4}", r or "")
-            if len(years) >= 2:
-                total += max(1, int(years[1]) - int(years[0]))
-            elif len(years) == 1:
-                total += 1
-
-        return {
-            "totalYears": total if total else len(positions),
-            "positions": positions,
-        }
-
-    def months_from_range(self, text):
-        if not text:
-            return 0
-
-        years = re.findall(r"\d{4}", text)
-
-        if len(years) < 2:
-            return 0
-
-        start = int(years[0])
-        end = int(years[1])
-
-        return max(1, (end - start) * 12)
-
-    def calculate_job_match(self, skills):
+    def calculate_job_match(self, skills, experience):
         technician_keywords = {
-            "mechanical", "maintenance", "repair", "technician",
-            "machine", "equipment", "inspection", "safety",
-            "troubleshooting", "motor", "electrical", "hydraulic",
-            "quality", "chemical", "operator", "wbg", "ltl",
-            "conversion", "recovery", "process"
+            "mechanical", "maintenance", "repair", "technician", "machine",
+            "equipment", "inspection", "safety", "troubleshooting", "motor",
+            "electrical", "hydraulic", "quality", "chemical", "operator",
+            "wbg", "ltl", "conversion", "recovery", "process"
         }
-
-        matched = 0
-        for s in skills:
-            name = s.get("name", "").lower()
-            if name in technician_keywords:
-                matched += 1
-
-        score = 30 + matched * 12
-        score = min(score, 95)
-
-        return {
-            "title": "Technician",
-            "matchPercentage": score,
-            "recommendations": []
-        }
-
-    # -----------------------------
-    # MAIN ANALYSIS
-    # -----------------------------
+        matched = sum(1 for s in skills if s.get("name", "").lower() in technician_keywords)
+        total_years = experience.get("totalYears", 0) if experience else 0
+        score = min(95, 30 + matched * 12 + total_years * 2)
+        return {"title": "Technician", "matchPercentage": score, "recommendations": []}
 
     def normalize_text(self, text: str) -> str:
         text = re.sub(r"[|•▪►]", " ", text)
         text = re.sub(r"\s{2,}", " ", text)
         text = re.sub(r"\n{3,}", "\n\n", text)
-
         replacements = {
-            "Nama": "Name",
-            "Umur": "Age",
-            "Alamat": "Address",
-            "Kemahiran": "Skills",
-            "Pengalaman": "Experience",
-            "Pendidikan": "Education",
-            "Jantina": "Gender",
-            "Jawatan": "Position",
-            "Tempoh": "Period",
-            "Syarikat": "Company",
+            "Nama": "Name", "Umur": "Age", "Alamat": "Address",
+            "Kemahiran": "Skills", "Pengalaman": "Experience",
+            "Pendidikan": "Education", "Jantina": "Gender",
+            "Jawatan": "Position", "Tempoh": "Period", "Syarikat": "Company",
         }
-
         for k, v in replacements.items():
             text = re.sub(rf"(?i)\b{k}\b", v, text)
-
         return text
 
-    def extract_education(self, text):
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-
-        # Section header — only pure header lines, NOT lines that are qualifications themselves
-        section_header = re.compile(
-            r"^(educational background|academic qualifications?|education|academic background|qualifications?)$",
-            re.I
-        )
-        end_keywords = re.compile(
-            r"(employment|work experience|experience|skills|certification|projects|references|personal particulars)",
-            re.I
-        )
-
-        # All qualification keywords including Malaysian certs
-        qual_keywords = re.compile(
-            r"(phd|degree|bachelor|master|diploma|certificate|sijil|"
-            r"malaysian school certificate|"
-            r"\bspm\b|\bstpm\b|\bupsr\b|\bpt3\b|\bpmr\b|"
-            r"igcse|a[\s\-]?level|o[\s\-]?level|lcci|"
-            r"\bskm\b|\bskkm\b|\bdkm\b|\bdkkm\b|\bsvm\b|"
-            r"vocational|vokasional|teknikal|technical)",
-            re.I
-        )
-
-        year_pattern = re.compile(r"\b(19|20)\d{2}\b")
-        year_range_pattern = re.compile(r"\b(19|20)\d{2}\s*[-–]\s*(19|20)\d{2}\b")
-
-        # Find education section boundaries
-        start = None
-        end = None
-
-        for idx, line in enumerate(lines):
-            if start is None:
-                # Only trigger on pure section header lines
-                if section_header.search(line):
-                    start = idx + 1
-                # OR if line itself contains a qual keyword — start from this line
-                elif qual_keywords.search(line):
-                    # Check surrounding context — is this in an education-like block?
-                    context = " ".join(lines[max(0, idx-3):idx+1]).lower()
-                    if any(kw in context for kw in ["education", "academic", "school", "college", "university", "sijil", "diploma"]):
-                        start = idx
-            elif start is not None and end_keywords.search(line):
-                end = idx
-                break
-
-        if start is None:
-            # Fallback: scan whole document for qualification lines
-            start = 0
-
-        section = lines[start:end] if end else lines[start:min(start + 40, len(lines))]
-
-        qualifications = []
-        seen_levels = set()
-
-        i = 0
-        while i < len(section):
-            line = section[i]
-            lower = line.lower()
-
-            qual_match = qual_keywords.search(line)
-            year_match = year_range_pattern.search(line) or year_pattern.search(line)
-
-            if qual_match:
-                level_raw = qual_match.group(0).strip()
-
-                # Normalize level name
-                level_map = {
-                    "malaysian school certificate": "SPM",
-                    "sijil pelajaran malaysia": "SPM",
-                    "sijil tinggi pelajaran malaysia": "STPM",
-                    "vocational": "SKM/VOCATIONAL",
-                    "vokasional": "SKM/VOCATIONAL",
-                    "teknikal": "TECHNICAL",
-                    "technical": "TECHNICAL",
-                }
-                level = level_map.get(level_raw.lower(), level_raw.upper())
-
-                # Avoid duplicate levels
-                if level in seen_levels:
-                    i += 1
-                    continue
-                seen_levels.add(level)
-
-                qualification = {
-                    "level": level,
-                    "institution": "",
-                    "field": "",
-                    "year": year_match.group(0) if year_match else "",
-                }
-
-                # Look at surrounding lines for institution and field
-                context_lines = section[i:min(len(section), i + 5)]
-                for ctx in context_lines:
-                    if re.search(r"(university|universiti|college|kolej|school|sekolah|institut|polytechnic|politeknik|akademi)", ctx, re.I):
-                        if not qualification["institution"]:
-                            qualification["institution"] = ctx.strip()
-                    elif re.search(r"(engineering|science|business|arts|technology|management|accounting|elektrik|mekanikal|computer|it|rendah|juru|teknik)", ctx, re.I):
-                        if not qualification["field"]:
-                            qualification["field"] = ctx.strip()
-                    # Year range in nearby line
-                    if not qualification["year"]:
-                        yr = year_range_pattern.search(ctx) or year_pattern.search(ctx)
-                        if yr:
-                            qualification["year"] = yr.group(0)
-
-                # If line itself contains school name
-                if re.search(r"(university|universiti|college|kolej|school|sekolah|institut|polytechnic|politeknik)", line, re.I):
-                    qualification["institution"] = line.strip()
-
-                # If institution still empty, try next non-qual line
-                if not qualification["institution"] and i + 1 < len(section):
-                    next_line = section[i + 1]
-                    if not qual_keywords.search(next_line) and len(next_line) > 5:
-                        qualification["institution"] = next_line.strip()
-
-                qualifications.append(qualification)
-                i += 1
-                continue
-
-            # Catch school/college lines even without qual keyword
-            if re.search(r"(university|universiti|college|kolej|sekolah|institut|polytechnic|politeknik)", line, re.I):
-                if not any(q["institution"] == line.strip() for q in qualifications):
-                    yr = year_range_pattern.search(line) or year_pattern.search(line)
-                    qualifications.append({
-                        "level": "",
-                        "institution": line.strip(),
-                        "field": "",
-                        "year": yr.group(0) if yr else "",
-                    })
-
-            i += 1
-
-        return qualifications
+    # -----------------------------
+    # MAIN ANALYSIS
+    # -----------------------------
 
     def analyze_resume(self, file_path):
         print("🔥 ATS RUNNING 🔥")
 
         raw_text = self.extract_text(file_path)
-
         print("\n===== RAW TEXT (FIRST 1500 CHARS) =====\n")
         print(raw_text[:1500])
 
         text = self.normalize_text(raw_text)
 
-        print("\n===== NORMALIZED TEXT (FIRST 1500 CHARS) =====\n")
-        print(text[:1500])
-
         if not text or len(text.strip()) < 100:
             raise Exception("Insufficient text extracted")
 
         try:
+            from langdetect import detect
             lang = detect(text)
         except:
             lang = "en"
 
-        personal_info = self.extract_personal_info(text)
-        skills = self.extract_skills(text)
-        experience = self.extract_experience(text)
-        education = self.extract_education(text)
-        job_match = self.calculate_job_match(skills)
+        # ── Try LLM extraction first ──────────────────────────────────
+        llm_result = self.extract_with_llm(text)
 
-        overall = min(
-            100,
+        if llm_result:
+            personal_info = {
+                "name":     llm_result.get("name"),
+                "email":    llm_result.get("email"),
+                "phone":    llm_result.get("phone"),
+                "location": llm_result.get("location"),
+            }
+            experience = llm_result.get("experience", {"totalYears": 0, "positions": []})
+            education  = llm_result.get("education", [])
+        else:
+            # ── Fallback to regex extraction ──────────────────────────
+            print("Using regex fallback")
+            personal_info = {
+                "name":     self.extract_name_regex(text),
+                "email":    self.extract_email_regex(text),
+                "phone":    self.extract_phone_regex(text),
+                "location": self.extract_location_regex(text),
+            }
+            experience = {"totalYears": 0, "positions": []}
+            education  = []
+
+        skills    = self.extract_skills(text)
+        job_match = self.calculate_job_match(skills, experience)
+
+        overall = min(100,
             job_match["matchPercentage"]
             + len(skills) * 2
-            + experience["totalYears"] * 3
+            + experience.get("totalYears", 0) * 3
         )
 
         return {
             "overallScore": overall,
             "personalInfo": personal_info,
-            "skills": skills,
-            "experience": experience,
-            "education": education,
-            "jobMatch": job_match,
+            "skills":       skills,
+            "experience":   experience,
+            "education":    education,
+            "jobMatch":     job_match,
             "analysisDate": datetime.now().isoformat(),
-            "language": lang,
-            "textLength": len(text),
+            "language":     lang,
+            "textLength":   len(text),
         }

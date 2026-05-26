@@ -226,6 +226,13 @@ class ATSProcessor:
             "able", "follow", "operate", "maintain", "machine", "operator",
             "about", "profil", "objective", "bahasa", "language",
             "religion", "islam", "male", "female", "gender",
+            # location noise
+            "sg", "ara", "arc", "dkt", "mukim", "lorong", "taman",
+            "nibong", "besar", "kecil", "lama", "baru", "dalam",
+            # document noise
+            "machines", "operator", "phone", "e-mail", "address",
+            "dob", "february", "january", "march", "april", "june",
+            "july", "august", "september", "october", "november", "december",
         ]
 
         lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -250,6 +257,10 @@ class ATSProcessor:
             if alpha_ratio < 0.85:
                 continue
 
+            # Each word must be at least 2 chars (filters "Sg", "D.", etc.)
+            if any(len(w.strip(".")) < 2 for w in words):
+                continue
+
             first_word = words[0].lower().rstrip(".")
 
             # Strong prefix match — high confidence, return immediately
@@ -268,7 +279,6 @@ class ATSProcessor:
             for word in words:
                 w = word.lower().rstrip(".")
                 if w in malay_strong_prefixes:
-                    # Make sure the prefix word is not preceded by noise words
                     idx = words.index(word)
                     # Allow at most 1 word before the prefix (OCR noise)
                     if idx <= 1:
@@ -276,6 +286,13 @@ class ATSProcessor:
                         name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
                         if len(name.split()) >= 2:
                             return name.title()
+
+            # All-caps full name detection (e.g. dark header banners)
+            # e.g. "MUHAMMAD SHARIZZAN BIN KAMIL"
+            if line == line.upper() and len(words) >= 3:
+                has_prefix = any(w.lower() in malay_strong_prefixes for w in words)
+                if has_prefix:
+                    return line.title()
 
         if best_candidate:
             return best_candidate
@@ -467,9 +484,27 @@ class ATSProcessor:
         # Also match year-only ranges like "2018 - 2020"
         year_range_pattern = re.compile(r"\d{4}\s*[-–]\s*(\d{4}|Present|present)", re.I)
 
+        # Noise patterns to skip in experience section
+        exp_noise = re.compile(
+            r"(ic number|ic no|nric|reference|rujukan|"
+            r"unit manager|tel :|get self|development and motivation|"
+            r"verify material|return extra material|issue in.out|work order|"
+            r"keep in system|handle shipment|provide good|clean food|"
+            r"chee chong|t\.leong|religion|gender|nationality)",
+            re.I
+        )
+
         i = 0
         while i < len(section):
             line = section[i]
+
+            # Skip garbage/noise lines
+            if exp_noise.search(line):
+                i += 1
+                continue
+            if re.match(r"^(@ |IC |Tel|Phone|\d{6,})", line.strip()):
+                i += 1
+                continue
 
             # Try to find company name (bold/capitalized lines or lines with Sdn Bhd etc)
             is_company = bool(re.search(

@@ -263,11 +263,34 @@ class ATSProcessor:
 
             first_word = words[0].lower().rstrip(".")
 
-            # Strong prefix match — high confidence, return immediately
+            # Strong prefix match — high confidence
             if first_word in malay_strong_prefixes + indian_prefixes:
-                name = " ".join(words)
+                name_words = list(words)
+                # If only 1 word (e.g. "MUHAMMAD" alone), collect next lines
+                if len(name_words) == 1:
+                    line_idx = lines.index(line) if line in lines else -1
+                    if line_idx >= 0:
+                        for next_line in lines[line_idx+1:line_idx+5]:
+                            nl = next_line.strip()
+                            # Stop if we hit a section header or noise
+                            if any(kw in nl.lower() for kw in hard_skip):
+                                break
+                            if any(c in nl for c in ["@", ":", "/"]):
+                                break
+                            if any(char.isdigit() for char in nl):
+                                break
+                            if len(nl.split()) > 4:
+                                break
+                            alpha_r = sum(c.isalpha() or c == " " for c in nl) / max(len(nl), 1)
+                            if alpha_r < 0.85:
+                                break
+                            name_words.extend(nl.split())
+                            if len(name_words) >= 4:
+                                break
+                name = " ".join(name_words)
                 name = re.sub(r"\s+[A-Z]\s*$", "", name).strip()
-                return name.title()
+                if len(name.split()) >= 2:
+                    return name.title()
 
             # Weak prefix match — keep as candidate, continue looking
             if first_word in malay_weak_prefixes + chinese_prefixes:
@@ -512,8 +535,32 @@ class ATSProcessor:
                 line, re.I
             ))
 
+            # Detect "TITLE    July 2023-April 2025" pattern (title + date on same line)
+            inline_date_match = re.match(
+                r"^([A-Z][A-Za-z/\s]+?)\s{2,}((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)[a-z]*\.?\s*\d{4}.+)",
+                line
+            )
+
             # Look for job title - company pattern: "Title – Company" or "Title at Company"
             header_match = re.match(r"(.+?)\s*[–\-]\s*(.+)", line)
+
+            if inline_date_match:
+                # Format: "OPERATOR/MACHINES    July 2023-April 2025"
+                title = inline_date_match.group(1).strip()
+                duration = inline_date_match.group(2).strip()
+                # Company is on the next line
+                company = section[i+1].strip() if i+1 < len(section) else ""
+                # Skip if company line looks like noise
+                if exp_noise.search(company) or re.match(r"^(@|IC |Tel|Phone|\d{6,})", company):
+                    company = ""
+                positions.append({
+                    "title": title or "Unknown Role",
+                    "company": company,
+                    "duration": duration,
+                })
+                durations.append(duration)
+                i += 2
+                continue
 
             if is_company or header_match:
                 company = line if is_company else (header_match.group(2).strip() if header_match else "")

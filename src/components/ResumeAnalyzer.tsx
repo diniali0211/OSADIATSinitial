@@ -171,6 +171,19 @@ export function ResumeAnalyzer() {
     setSelectedRecruiter('');
   };
 
+
+  const formatExperience = (totalYears?: number, totalMonths?: number): string | null => {
+    if (totalMonths && totalMonths > 0) {
+      const yrs  = Math.floor(totalMonths / 12);
+      const mths = totalMonths % 12;
+      if (yrs === 0)  return `${mths} month${mths !== 1 ? 's' : ''}`;
+      if (mths === 0) return `${yrs} yr${yrs !== 1 ? 's' : ''}`;
+      return `${yrs} yr${yrs !== 1 ? 's' : ''} ${mths} month${mths !== 1 ? 's' : ''}`;
+    }
+    if (totalYears && totalYears > 0) return `${totalYears} yr${totalYears !== 1 ? 's' : ''}`;
+    return null;
+  };
+
   /* ---------------- UI ---------------- */
   return (
     <div className="space-y-6">
@@ -334,7 +347,7 @@ export function ResumeAnalyzer() {
             {positions.length > 0 && (
               <div style={{ marginBottom: '24px' }}>
                 <h4 style={{ fontWeight: '600', marginBottom: '8px' }}>
-                  Work Experience ({experience.totalYears ?? 0} yrs)
+                  {formatExperience(experience.totalYears, experience.totalMonths) ? `Work Experience (${formatExperience(experience.totalYears, experience.totalMonths)})` : 'Work Experience'}
                 </h4>
                 {positions.map((pos: any, i: number) => (
                   <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '16px', marginBottom: '12px', background: 'rgba(255,255,255,0.4)' }}>

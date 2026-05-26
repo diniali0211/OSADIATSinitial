@@ -157,6 +157,19 @@ export function DecisionQueue() {
     setSelectedRecruiter('');
   };
 
+
+  const formatExperience = (totalYears?: number, totalMonths?: number): string | null => {
+    if (totalMonths && totalMonths > 0) {
+      const yrs  = Math.floor(totalMonths / 12);
+      const mths = totalMonths % 12;
+      if (yrs === 0)  return `${mths} month${mths !== 1 ? 's' : ''}`;
+      if (mths === 0) return `${yrs} yr${yrs !== 1 ? 's' : ''}`;
+      return `${yrs} yr${yrs !== 1 ? 's' : ''} ${mths} month${mths !== 1 ? 's' : ''}`;
+    }
+    if (totalYears && totalYears > 0) return `${totalYears} yr${totalYears !== 1 ? 's' : ''}`;
+    return null;
+  };
+
   return (
     <div className="space-y-6">
 
@@ -326,6 +339,37 @@ export function DecisionQueue() {
                     {edu.year && (
                       <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{edu.year}</p>
                     )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Work Experience */}
+            {selectedCandidate.analysis?.experience?.positions?.length > 0 && (
+              <div style={{ marginBottom: '20px' }}>
+                <h4 style={{ fontWeight: '600', fontSize: '15px', marginBottom: '10px' }}>
+                  Work Experience ({formatExperience(selectedCandidate.analysis.experience.totalYears, selectedCandidate.analysis.experience.totalMonths) ?? '—'})
+                </h4>
+                {selectedCandidate.analysis.experience.positions.map((pos: any, i: number) => (
+                  <div key={i} style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '12px', marginBottom: '8px', background: '#fafafa' }}>
+                    <p style={{ fontWeight: '500', fontSize: '14px' }}>{pos.title}</p>
+                    <p style={{ fontSize: '13px', color: '#4b5563' }}>{pos.company}</p>
+                    {pos.duration && <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{pos.duration}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Education */}
+            {selectedCandidate.analysis?.education?.length > 0 && (
+              <div style={{ marginBottom: '20px' }}>
+                <h4 style={{ fontWeight: '600', fontSize: '15px', marginBottom: '10px' }}>Education</h4>
+                {selectedCandidate.analysis.education.map((edu: any, i: number) => (
+                  <div key={i} style={{ border: '1px solid #e0e7ff', borderRadius: '8px', padding: '12px', marginBottom: '8px', background: 'rgba(238,242,255,0.5)' }}>
+                    {edu.level && <span style={{ display: 'inline-block', background: '#e0e7ff', color: '#3730a3', padding: '2px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>{edu.level}</span>}
+                    {edu.institution && <p style={{ fontWeight: '500', fontSize: '14px' }}>{edu.institution}</p>}
+                    {edu.field && <p style={{ fontSize: '13px', color: '#4b5563' }}>{edu.field}</p>}
+                    {edu.year && <p style={{ fontSize: '12px', color: '#9ca3af', marginTop: '2px' }}>{edu.year}</p>}
                   </div>
                 ))}
               </div>

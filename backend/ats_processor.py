@@ -209,6 +209,7 @@ Return this exact JSON structure:
   "location": "city or state or null",
   "experience": {{
     "totalYears": 0,
+    "totalMonths": 0,
     "positions": [
       {{"title": "job title", "company": "company name", "duration": "date range"}}
     ]
@@ -222,7 +223,8 @@ Rules:
 - name: full name only, no job titles or addresses
 - phone: Malaysian format preferred (01X-XXXXXXXX)
 - location: city or state only (e.g. Pulau Pinang, Bayan Lepas)
-- totalYears: calculate from work history
+- totalYears: calculate from work history (round down to full years)
+- totalMonths: total experience in months (e.g. 18 months = 1 year 6 months)
 - If field is unknown return null
 - Return ONLY the JSON object"""
 

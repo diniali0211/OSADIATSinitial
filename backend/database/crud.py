@@ -1,7 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 from .models import Candidate
-from datetime import datetime
 
 async def create_candidate(db: AsyncSession, data: dict):
     new_candidate = Candidate(
@@ -12,6 +10,7 @@ async def create_candidate(db: AsyncSession, data: dict):
         score=data.get("score"),
         resume_text=data.get("resume_text"),
         resume_url=data.get("resume_url"),
+        status=data.get("status", "PENDING"),  # ← reads status from data
         reject_reason=None,
         recuiter_name=None,
     )
@@ -21,6 +20,8 @@ async def create_candidate(db: AsyncSession, data: dict):
     await db.refresh(new_candidate)
 
     return new_candidate
+
+from sqlalchemy.future import select
 
 async def update_decision(db: AsyncSession, candidate_id: int, decision: str, reason: str = None, recruiter: str = None):
     result = await db.execute(
@@ -40,7 +41,8 @@ async def update_decision(db: AsyncSession, candidate_id: int, decision: str, re
     elif decision == "HIRED":
         if recruiter:
             candidate.recuiter_name = recruiter
-        candidate.hired_date = datetime.utcnow()   # ← set hired date automatically
+        from datetime import datetime
+        candidate.hired_date = datetime.utcnow()
 
     await db.commit()
     await db.refresh(candidate)

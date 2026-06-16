@@ -131,9 +131,16 @@ export function Applicants() {
               >
                 <div className="flex justify-between items-start">
                   <div style={{ flex: 1 }}>
-                    <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#111827', marginBottom: '10px' }}>
-                      {c.name || 'Unknown'}
-                    </h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                      <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#111827' }}>
+                        {c.name || 'Unknown'}
+                      </h3>
+                      {c.role_applied && (
+                        <span style={{ padding: '3px 12px', background: '#ecfdf5', color: '#065f46', borderRadius: '999px', fontSize: '12px', fontWeight: '600', border: '1px solid #6ee7b7' }}>
+                          {c.role_applied}
+                        </span>
+                      )}
+                    </div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginBottom: '10px' }}>
                       {c.email && (
                         <span style={{ fontSize: '14px', color: '#4b5563' }}>✉️ {c.email}</span>
@@ -182,7 +189,14 @@ export function Applicants() {
             {/* Info */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
               <div>
-                <h3 style={{ fontSize: '18px', fontWeight: '600', marginBottom: '4px' }}>{selected.name}</h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                  <h3 style={{ fontSize: '18px', fontWeight: '600' }}>{selected.name}</h3>
+                  {selected.role_applied && (
+                    <span style={{ padding: '3px 12px', background: '#ecfdf5', color: '#065f46', borderRadius: '999px', fontSize: '12px', fontWeight: '600', border: '1px solid #6ee7b7' }}>
+                      🎯 {selected.role_applied}
+                    </span>
+                  )}
+                </div>
                 {formatExp(selected.totalYears, selected.totalMonths) && (
                   <p style={{ fontSize: '14px', color: '#6b7280', marginBottom: '2px' }}>
                     💼 {formatExp(selected.totalYears, selected.totalMonths)} experience

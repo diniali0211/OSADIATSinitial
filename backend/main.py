@@ -1,8 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import List
 from datetime import datetime
 import tempfile
 import shutil
@@ -20,10 +19,6 @@ from database.models import Candidate, Settings
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from r2_storage import upload_pdf, get_pdf_url
-
-# -------------------------
-# App setup
-# -------------------------
 
 print("MAIN.PY  IS RUNNING")
 
@@ -44,23 +39,8 @@ app.add_middleware(
 
 processor = ATSProcessor()
 
-
-# -------------------------
-# Constants & Schemas
-# -------------------------
-
-VALID_DECISIONS = {
-    "APPROVED", "REJECTED", "KIV", "HIRED", "RESIGNED", "ABSCONDED"
-}
-
-VALID_REJECT_REASONS = {
-    "INCOMPLETE",
-    "LOW_SKILL",
-    "INSTRUCTIONS",
-    "LEVEL_MISMATCH",
-    "CULTURE",
-    "VETTING",
-}
+VALID_DECISIONS = {"APPROVED","REJECTED","KIV","HIRED","RESIGNED","ABSCONDED"}
+VALID_REJECT_REASONS = {"INCOMPLETE","LOW_SKILL","INSTRUCTIONS","LEVEL_MISMATCH","CULTURE","VETTING"}
 
 class DecisionPayload(BaseModel):
     candidate_id: str
@@ -68,32 +48,22 @@ class DecisionPayload(BaseModel):
     reason: str | None = None
     recruiter: str | None = None
 
-# -------------------------
-# Health Check
-# -------------------------
-
 @app.get("/health")
 def health_check():
-    return {
-        "status": "ok",
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
-# -------------------------
-# Resume Analysis
-# -------------------------
-
-@app.post("/analyze")
-async def analyze_resume(
+# ── Candidate Portal: public apply ────────────────────────────────────────
+@app.post("/apply")
+async def apply(
     file: UploadFile = File(...),
+    name: str = Form(None),
+    email: str = Form(None),
+    phone: str = Form(None),
     db: AsyncSession = Depends(get_db)
 ):
     ext = os.path.splitext(file.filename)[1].lower()
-
     if ext not in [".pdf", ".doc", ".docx"]:
-        raise HTTPException(status_code=400, detail="Unsupported file type")
-
-    candidate_id = str(uuid.uuid4())
+        raise HTTPException(status_code=400, detail="Only PDF, DOC, DOCX files are supported")
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         shutil.copyfileobj(file.file, tmp)
@@ -102,7 +72,80 @@ async def analyze_resume(
     try:
         analysis = processor.analyze_resume(temp_path)
 
-        # ── Duplicate detection ──────────────────────────────────────
+        parsed = analysis.get("personalInfo", {})
+        final_name  = (name  or "").strip() or parsed.get("name")
+        final_email = (email or "").strip() or parsed.get("email")
+        final_phone = (phone or "").strip() or parsed.get("phone")
+
+        try:
+            unique_filename = f"{uuid.uuid4()}_{file.filename}"
+            pdf_key = upload_pdf(temp_path, unique_filename)
+        except Exception as e:
+            print(f"R2 UPLOAD ERROR: {e}")
+            pdf_key = None
+
+        candidate = await create_candidate(db, {
+            "name":        final_name,
+            "email":       final_email,
+            "phone":       final_phone,
+            "location":    parsed.get("location"),
+            "score":       analysis.get("overallScore", 0),
+            "resume_text": str(analysis),
+            "resume_url":  pdf_key,
+            "status":      "APPLICANT",
+        })
+
+        return {
+            "success":      True,
+            "message":      "Your application has been submitted successfully!",
+            "candidate_id": str(candidate.id),
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+@app.get("/applicants")
+async def get_applicants(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Candidate).where(Candidate.status == "APPLICANT"))
+    candidates = result.scalars().all()
+    return [
+        {
+            "id":            c.id,
+            "name":          c.name,
+            "email":         c.email,
+            "phone":         c.phone,
+            "location":      c.location,
+            "score":         c.score,
+            "status":        c.status,
+            "resume_text":   c.resume_text,
+            "created_at":    c.created_at.isoformat() if c.created_at else None,
+            "resume_url":    c.resume_url,
+            "reject_reason": c.reject_reason,
+        }
+        for c in candidates
+    ]
+
+
+# ── Recruiter: analyze (with duplicate detection) ─────────────────────────
+@app.post("/analyze")
+async def analyze_resume(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db)
+):
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in [".pdf", ".doc", ".docx"]:
+        raise HTTPException(status_code=400, detail="Unsupported file type")
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        temp_path = tmp.name
+
+    try:
+        analysis = processor.analyze_resume(temp_path)
         extracted_name  = analysis.get("personalInfo", {}).get("name")
         extracted_phone = analysis.get("personalInfo", {}).get("phone")
         extracted_email = analysis.get("personalInfo", {}).get("email")
@@ -110,177 +153,102 @@ async def analyze_resume(
         if extracted_name or extracted_phone or extracted_email:
             existing = await db.execute(select(Candidate))
             all_candidates = existing.scalars().all()
-
-            def clean(s):
-                return re.sub(r"\D", "", s or "").strip()
-
+            def clean(s): return re.sub(r"\D", "", s or "").strip()
             for c in all_candidates:
-                name_match  = (
-                    extracted_name and c.name and
-                    extracted_name.lower().strip() == (c.name or "").lower().strip()
-                )
-                phone_match = (
-                    extracted_phone and c.phone and
-                    clean(extracted_phone) == clean(c.phone)
-                )
-                email_match = (
-                    extracted_email and c.email and
-                    extracted_email.lower().strip() == (c.email or "").lower().strip()
-                )
-
-                # Flag as duplicate if name + phone match, or email matches
+                name_match  = extracted_name  and c.name  and extracted_name.lower().strip()  == (c.name  or "").lower().strip()
+                phone_match = extracted_phone and c.phone and clean(extracted_phone) == clean(c.phone)
+                email_match = extracted_email and c.email and extracted_email.lower().strip() == (c.email or "").lower().strip()
                 if (name_match and phone_match) or email_match:
                     return {
-                        "duplicate": True,
-                        "message": f"⚠️ This candidate already exists in the system as '{c.name}' (ID: {c.id}, Status: {c.status}). Please review the existing record before proceeding.",
+                        "duplicate":             True,
+                        "message":               f"⚠️ This candidate already exists in the system as '{c.name}' (ID: {c.id}, Status: {c.status}).",
                         "existing_candidate_id": c.id,
-                        "analysis": analysis
+                        "analysis":              analysis,
                     }
-        # ─────────────────────────────────────────────────────────────
 
         try:
             unique_filename = f"{uuid.uuid4()}_{file.filename}"
             pdf_key = upload_pdf(temp_path, unique_filename)
-        except Exception as r2_error:
-            print(f"R2 UPLOAD ERROR: {r2_error}")
+        except Exception as e:
+            print(f"R2 UPLOAD ERROR: {e}")
             pdf_key = None
 
         candidate = await create_candidate(db, {
-            "name": extracted_name,
-            "email": extracted_email,
-            "phone": extracted_phone,
-            "location": analysis.get("personalInfo", {}).get("location"),
-            "score": analysis.get("overallScore", 0),
+            "name":        extracted_name,
+            "email":       extracted_email,
+            "phone":       extracted_phone,
+            "location":    analysis.get("personalInfo", {}).get("location"),
+            "score":       analysis.get("overallScore", 0),
             "resume_text": str(analysis),
-            "resume_url": pdf_key,
+            "resume_url":  pdf_key,
         })
 
-        return {
-            "duplicate": False,
-            "candidate_id": str(candidate.id),
-            "analysis": analysis
-        }
+        return {"duplicate": False, "candidate_id": str(candidate.id), "analysis": analysis}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
 
-# -------------------------
-# Decision
-# -------------------------
-
+# ── Decision ──────────────────────────────────────────────────────────────
 @app.post("/decision")
-async def set_decision(
-    payload: DecisionPayload,
-    db: AsyncSession = Depends(get_db)
-):
+async def set_decision(payload: DecisionPayload, db: AsyncSession = Depends(get_db)):
     decision = payload.decision.upper()
-
     if decision not in VALID_DECISIONS:
         raise HTTPException(status_code=400, detail="Invalid decision")
-
     if decision == "REJECTED":
         if not payload.reason:
-            raise HTTPException(
-                status_code=400, detail="Reject reason required")
+            raise HTTPException(status_code=400, detail="Reject reason required")
         if payload.reason not in VALID_REJECT_REASONS:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Invalid reject reason", "allowed": list(VALID_REJECT_REASONS)}
-            )
-
-    updated = await update_decision(
-        db,
-        payload.candidate_id,
-        decision,
-        payload.reason,
-        payload.recruiter
-    )
-
+            raise HTTPException(status_code=400, detail={"error": "Invalid reject reason", "allowed": list(VALID_REJECT_REASONS)})
+    updated = await update_decision(db, payload.candidate_id, decision, payload.reason, payload.recruiter)
     if not updated:
         raise HTTPException(status_code=404, detail="Candidate not found")
-
-    return {
-        "status": "ok",
-        "candidate": updated
-    }
+    return {"status": "ok", "candidate": updated}
 
 
-# -------------------------
-# Candidates
-# -------------------------
-
+# ── Candidates ───────────────────────────────────────────────────────────
 @app.get("/candidates")
 async def get_candidates(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Candidate))
     candidates = result.scalars().all()
-
-    formatted = []
-
-    for c in candidates:
-        formatted.append({
-            "id": c.id,
-            "name": c.name,
-            "email": c.email,
-            "phone": c.phone,
-            "location": c.location,
-            "score": c.score,
-            "status": c.status,
-            "resume_text": c.resume_text,
+    return [
+        {
+            "id": c.id, "name": c.name, "email": c.email,
+            "phone": c.phone, "location": c.location, "score": c.score,
+            "status": c.status, "resume_text": c.resume_text,
             "created_at": c.created_at.isoformat() if c.created_at else None,
-            "abscond_date": c.abscond_date,
-            "resume_url": c.resume_url,
-            "reject_reason": c.reject_reason,
-            "recruiter_name": c.recuiter_name,
+            "abscond_date": c.abscond_date, "resume_url": c.resume_url,
+            "reject_reason": c.reject_reason, "recruiter_name": c.recuiter_name,
             "hired_date": getattr(c, "hired_date", None).isoformat() if getattr(c, "hired_date", None) else None,
-        })
+        }
+        for c in candidates
+    ]
 
-    return formatted
-
-
-# -------------------------
-# Resume URL
-# -------------------------
 
 @app.get("/resume-url/{candidate_id}")
 async def get_resume_url(candidate_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Candidate).where(Candidate.id == candidate_id)
-    )
+    result = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
     candidate = result.scalars().first()
-
     if not candidate or not candidate.resume_url:
         raise HTTPException(status_code=404, detail="Resume not found")
-
-    url = get_pdf_url(candidate.resume_url)
-    return {"url": url}
+    return {"url": get_pdf_url(candidate.resume_url)}
 
 
-# -------------------------
-# Settings
-# -------------------------
-
+# ── Settings ─────────────────────────────────────────────────────────────
 @app.get("/settings")
 async def get_settings(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Settings).where(Settings.id == 1))
     settings = result.scalars().first()
-    if not settings:
-        return {}
+    if not settings: return {}
     return {
-        "company_name": settings.company_name,
-        "hr_name": settings.hr_name,
-        "hr_email": settings.hr_email,
-        "hiring_position": settings.hiring_position,
-        "min_score": settings.min_score,
-        "data_retention": settings.data_retention,
-        "language": settings.language,
-        "date_format": settings.date_format,
-        "app_password": settings.app_password,
-        "delete_password": settings.delete_password,
+        "company_name": settings.company_name, "hr_name": settings.hr_name,
+        "hr_email": settings.hr_email, "hiring_position": settings.hiring_position,
+        "min_score": settings.min_score, "data_retention": settings.data_retention,
+        "language": settings.language, "date_format": settings.date_format,
+        "app_password": settings.app_password, "delete_password": settings.delete_password,
     }
 
 @app.post("/settings")
@@ -290,42 +258,24 @@ async def save_settings(payload: dict, db: AsyncSession = Depends(get_db)):
     if not settings:
         settings = Settings(id=1)
         db.add(settings)
-
-    settings.company_name = payload.get("company_name", settings.company_name)
-    settings.hr_name = payload.get("hr_name", settings.hr_name)
-    settings.hr_email = payload.get("hr_email", settings.hr_email)
-    settings.hiring_position = payload.get("hiring_position", settings.hiring_position)
-    settings.min_score = payload.get("min_score", settings.min_score)
-    settings.data_retention = payload.get("data_retention", settings.data_retention)
-    settings.language = payload.get("language", settings.language)
-    settings.date_format = payload.get("date_format", settings.date_format)
-    settings.app_password = payload.get("app_password", settings.app_password)
-    settings.delete_password = payload.get("delete_password", settings.delete_password)
-
+    for field in ["company_name","hr_name","hr_email","hiring_position","min_score","data_retention","language","date_format","app_password","delete_password"]:
+        if field in payload:
+            setattr(settings, field, payload[field])
     await db.commit()
     await db.refresh(settings)
     return {"status": "ok"}
-
-
-# -------------------------
-# Password Verification
-# -------------------------
 
 class DeletePasswordPayload(BaseModel):
     password: str
 
 @app.post("/verify-delete-password")
-async def verify_delete_password(
-    payload: DeletePasswordPayload,
-    db: AsyncSession = Depends(get_db)
-):
+async def verify_delete_password(payload: DeletePasswordPayload, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Settings).where(Settings.id == 1))
     settings = result.scalars().first()
     correct = settings.delete_password if settings else "delete124"
     if payload.password != correct:
         raise HTTPException(status_code=401, detail="Invalid Password")
     return {"status": "ok"}
-
 
 class LoginPayload(BaseModel):
     password: str
@@ -334,86 +284,39 @@ class LoginPayload(BaseModel):
 async def login(payload: LoginPayload, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Settings).where(Settings.id == 1))
     settings = result.scalars().first()
-
-    correct_password = settings.app_password if settings else "admin123"
-
-    if payload.password != correct_password:
+    correct = settings.app_password if settings else "admin123"
+    if payload.password != correct:
         raise HTTPException(status_code=401, detail="Invalid password")
-
     return {"status": "ok", "message": "Login Successful"}
 
 
-# -------------------------
-# Export CSV
-# -------------------------
-
+# ── Export CSV ───────────────────────────────────────────────────────────
 @app.get("/export-csv")
 async def export_csv(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Candidate))
     candidates = result.scalars().all()
-
     def fmt_date(d):
-        if d is None:
-            return ""
-        try:
-            return d.strftime("%d/%m/%Y %H:%M")
-        except:
-            return str(d)
-
+        if d is None: return ""
+        try: return d.strftime("%d/%m/%Y %H:%M")
+        except: return str(d)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "ID", "Name", "Email", "Phone", "Location", "Score",
-        "Status", "Reject Reason", "Resume URL",
-        "Created At", "Abscond Date", "Hired Date", "Recruiter"
-    ])
-
+    writer.writerow(["ID","Name","Email","Phone","Location","Score","Status","Reject Reason","Resume URL","Created At","Abscond Date","Hired Date","Recruiter"])
     for c in candidates:
-        writer.writerow([
-            c.id, c.name, c.email, c.phone, c.location,
-            c.score, c.status, c.reject_reason, c.resume_url,
-            fmt_date(c.created_at),
-            c.abscond_date,
-            fmt_date(getattr(c, "hired_date", None)),
-            c.recuiter_name
-        ])
-
+        writer.writerow([c.id, c.name, c.email, c.phone, c.location, c.score, c.status, c.reject_reason, c.resume_url, fmt_date(c.created_at), c.abscond_date, fmt_date(getattr(c,"hired_date",None)), c.recuiter_name])
     output.seek(0)
-    return StreamingResponse(
-        io.BytesIO(output.getvalue().encode()),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=candidates_export.csv"}
-    )
-
-
-# -------------------------
-# Settings Reset
-# -------------------------
+    return StreamingResponse(io.BytesIO(output.getvalue().encode()), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=candidates_export.csv"})
 
 @app.post("/settings/reset")
 async def reset_settings(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Settings).where(Settings.id == 1))
     settings = result.scalars().first()
-    if not settings:
-        return {"status": "ok"}
-
-    settings.company_name = "My Company"
-    settings.hr_name = ""
-    settings.hr_email = ""
-    settings.hiring_position = ""
-    settings.min_score = 50.0
-    settings.data_retention = "90"
-    settings.language = "en"
-    settings.date_format = "DD/MM/YYYY"
-    settings.app_password = "admin123"
-
+    if not settings: return {"status": "ok"}
+    settings.company_name = "My Company"; settings.hr_name = ""; settings.hr_email = ""
+    settings.hiring_position = ""; settings.min_score = 50.0; settings.data_retention = "90"
+    settings.language = "en"; settings.date_format = "DD/MM/YYYY"; settings.app_password = "admin123"
     await db.commit()
     return {"status": "ok"}
-
-
-# -------------------------
-# Delete All Candidates
-# -------------------------
 
 @app.delete("/candidates/all")
 async def delete_all_candidates(db: AsyncSession = Depends(get_db)):

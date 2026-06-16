@@ -59,6 +59,7 @@ async def apply(
     name: str = Form(None),
     email: str = Form(None),
     phone: str = Form(None),
+    role: str = Form(None),
     db: AsyncSession = Depends(get_db)
 ):
     ext = os.path.splitext(file.filename)[1].lower()
@@ -85,14 +86,15 @@ async def apply(
             pdf_key = None
 
         candidate = await create_candidate(db, {
-            "name":        final_name,
-            "email":       final_email,
-            "phone":       final_phone,
-            "location":    parsed.get("location"),
-            "score":       analysis.get("overallScore", 0),
-            "resume_text": str(analysis),
-            "resume_url":  pdf_key,
-            "status":      "APPLICANT",
+            "name":         final_name,
+            "email":        final_email,
+            "phone":        final_phone,
+            "location":     parsed.get("location"),
+            "score":        analysis.get("overallScore", 0),
+            "resume_text":  str(analysis),
+            "resume_url":   pdf_key,
+            "status":       "APPLICANT",
+            "role_applied": (role or "").strip() or None,
         })
 
         return {
@@ -124,7 +126,8 @@ async def get_applicants(db: AsyncSession = Depends(get_db)):
             "resume_text":   c.resume_text,
             "created_at":    c.created_at.isoformat() if c.created_at else None,
             "resume_url":    c.resume_url,
-            "reject_reason": c.reject_reason,
+            "reject_reason":  c.reject_reason,
+            "role_applied":   getattr(c, "role_applied", None),
         }
         for c in candidates
     ]

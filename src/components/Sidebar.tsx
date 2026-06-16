@@ -8,6 +8,7 @@ import {
   BrainCircuit,
   Zap,
   LogOut,
+  ClipboardList,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -18,12 +19,13 @@ interface SidebarProps {
 
 export function Sidebar({ activeTab, setActiveTab, onLogout }: SidebarProps) {
   const menuItems = [
-    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-    { id: 'analyzer', label: 'Resume Analyzer', icon: FileSearch },
-    { id: 'candidates', label: 'Candidates', icon: Users },
-    { id: 'hired', label: 'Hired', icon: Zap },
-    { id: 'kiv', label: 'Decision Queue', icon: Briefcase },
-    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'analytics',   label: 'Analytics',          icon: BarChart3      },
+    { id: 'analyzer',    label: 'Resume Analyzer',     icon: FileSearch     },
+    { id: 'applicants',  label: 'Applicants',          icon: ClipboardList  },
+    { id: 'candidates',  label: 'Candidates',          icon: Users          },
+    { id: 'hired',       label: 'Hired',               icon: Zap            },
+    { id: 'kiv',         label: 'Decision Queue',      icon: Briefcase      },
+    { id: 'settings',    label: 'Settings',            icon: Settings       },
   ];
 
   const glassStyle = {
@@ -34,10 +36,8 @@ export function Sidebar({ activeTab, setActiveTab, onLogout }: SidebarProps) {
   };
 
   return (
-    <aside
-      className="w-64 shadow-2xl min-h-screen flex flex-col"
-      style={glassStyle}
-    >
+    <aside className="w-64 shadow-2xl min-h-screen flex flex-col" style={glassStyle}>
+
       {/* Header */}
       <div className="p-6 border-b border-white/20">
         <div className="flex items-center gap-3">
@@ -57,6 +57,7 @@ export function Sidebar({ activeTab, setActiveTab, onLogout }: SidebarProps) {
         {menuItems.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
+          const isApplicants = item.id === 'applicants';
 
           return (
             <button
@@ -65,17 +66,33 @@ export function Sidebar({ activeTab, setActiveTab, onLogout }: SidebarProps) {
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all duration-300 ${
                 isActive
                   ? 'bg-gradient-to-r from-purple-500 to-teal-500 text-white transform translate-x-1'
+                  : isApplicants
+                  ? 'text-teal-700 bg-teal-50/60 hover:bg-teal-100/60 hover:translate-x-1'
                   : 'text-gray-700 hover:bg-white/20 hover:translate-x-1'
               }`}
             >
               <Icon className="w-5 h-5" />
               <span>{item.label}</span>
+              {/* New badge on Applicants */}
+              {isApplicants && !isActive && (
+                <span style={{
+                  marginLeft: 'auto',
+                  fontSize: '10px',
+                  fontWeight: '600',
+                  padding: '1px 7px',
+                  background: '#14b8a6',
+                  color: 'white',
+                  borderRadius: '999px',
+                }}>
+                  NEW
+                </span>
+              )}
             </button>
           );
         })}
       </nav>
 
-      {/* Logout Button */}
+      {/* Logout */}
       <div className="p-4 border-t border-white/20">
         <button
           onClick={() => {

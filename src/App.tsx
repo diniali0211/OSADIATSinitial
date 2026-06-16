@@ -6,6 +6,7 @@ import { Analytics } from "./components/Analytics";
 import { Settings } from "./components/Settings";
 import HiredCandidates from "./components/HiredCandidates";
 import { DecisionQueue } from "./components/DecisionQueue";
+import { Applicants } from "./components/Applicants";
 import { Login } from "./components/Login";
 
 export default function App() {
@@ -45,20 +46,20 @@ export default function App() {
     setIsLoggedIn(false);
   };
 
-  // Show login if not logged in
   if (!isLoggedIn) {
     return <Login onLogin={() => setIsLoggedIn(true)} />;
   }
 
   const renderContent = () => {
     switch (activeTab) {
-      case "analyzer": return <ResumeAnalyzer />;
-      case "candidates": return <CandidateManagement />;
-      case "kiv": return <DecisionQueue />;
-      case "analytics": return <Analytics />;
-      case "hired": return <HiredCandidates />;
-      case "settings": return <Settings onThemeChange={applyTheme} currentTheme={theme} onLogout={handleLogout} />;
-      default: return <Analytics />;
+      case "analyzer":    return <ResumeAnalyzer />;
+      case "candidates":  return <CandidateManagement />;
+      case "applicants":  return <Applicants />;
+      case "kiv":         return <DecisionQueue />;
+      case "analytics":   return <Analytics />;
+      case "hired":       return <HiredCandidates />;
+      case "settings":    return <Settings onThemeChange={applyTheme} currentTheme={theme} onLogout={handleLogout} />;
+      default:            return <Analytics />;
     }
   };
 

@@ -119,36 +119,50 @@ export function Applicants() {
           <p className="text-gray-400 text-sm mt-1">Share your candidate portal link to start receiving applications</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="space-y-4">
           {applicants.map(c => {
             const exp = formatExp(parseTotalYears(c.resume_text || ''), parseTotalMonths(c.resume_text || ''));
             return (
               <div
                 key={c.id}
                 onClick={() => setSelected(enrich(c))}
-                className="rounded-2xl p-5 cursor-pointer hover:scale-[1.01] transition-transform"
-                style={glassStyle}
+                className="rounded-2xl cursor-pointer hover:scale-[1.005] transition-transform"
+                style={{ ...glassStyle, padding: '28px 32px' }}
               >
-                <div className="flex justify-between items-start mb-3">
-                  <div>
-                    <h3 className="font-semibold text-lg">{c.name || 'Unknown'}</h3>
-                    <p className="text-sm text-gray-500">{c.email || '-'}</p>
-                    <p className="text-sm text-gray-500">{c.phone || '-'}</p>
-                    {c.location && <p className="text-sm text-gray-500">📍 {c.location}</p>}
-                    {exp && <p className="text-sm text-purple-600 mt-1">💼 {exp} experience</p>}
+                <div className="flex justify-between items-start">
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ fontSize: '18px', fontWeight: '600', color: '#111827', marginBottom: '10px' }}>
+                      {c.name || 'Unknown'}
+                    </h3>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', marginBottom: '10px' }}>
+                      {c.email && (
+                        <span style={{ fontSize: '14px', color: '#4b5563' }}>✉️ {c.email}</span>
+                      )}
+                      {c.phone && (
+                        <span style={{ fontSize: '14px', color: '#4b5563' }}>📞 {c.phone}</span>
+                      )}
+                      {c.location && (
+                        <span style={{ fontSize: '14px', color: '#4b5563' }}>📍 {c.location}</span>
+                      )}
+                    </div>
+                    {exp && (
+                      <p style={{ fontSize: '14px', color: '#7c3aed', fontWeight: '500', marginBottom: '8px' }}>
+                        💼 {exp} experience
+                      </p>
+                    )}
+                    <p style={{ fontSize: '12px', color: '#9ca3af' }}>
+                      Applied: {c.created_at ? new Date(c.created_at).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
+                    </p>
                   </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <span style={{ padding: '3px 10px', background: '#f3e8ff', color: '#7c3aed', borderRadius: '999px', fontSize: '12px', fontWeight: '600' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '10px', marginLeft: '24px' }}>
+                    <span style={{ padding: '6px 16px', background: '#f3e8ff', color: '#7c3aed', borderRadius: '999px', fontSize: '14px', fontWeight: '600', whiteSpace: 'nowrap' }}>
                       Score: {c.score || 0}%
                     </span>
-                    <span style={{ padding: '3px 10px', background: '#fef9c3', color: '#854d0e', borderRadius: '999px', fontSize: '11px', fontWeight: '600' }}>
+                    <span style={{ padding: '5px 14px', background: '#fef9c3', color: '#854d0e', borderRadius: '999px', fontSize: '12px', fontWeight: '600' }}>
                       APPLICANT
                     </span>
                   </div>
                 </div>
-                <p className="text-xs text-gray-400">
-                  Applied: {c.created_at ? new Date(c.created_at).toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
-                </p>
               </div>
             );
           })}

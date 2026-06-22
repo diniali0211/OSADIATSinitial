@@ -351,6 +351,8 @@ async def migrate_to_postgres(secret: str, db: AsyncSession = Depends(get_db)):
 
     if target_url.startswith("postgres://"):
         target_url = target_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    elif target_url.startswith("postgresql://") and "+asyncpg" not in target_url:
+        target_url = target_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
     target_engine = create_async_engine(target_url)
     TargetSession = _sessionmaker(bind=target_engine, class_=_AsyncSession, expire_on_commit=False)

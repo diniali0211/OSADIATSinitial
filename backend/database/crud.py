@@ -25,9 +25,13 @@ async def create_candidate(db: AsyncSession, data: dict):
     return new_candidate
 
 
-async def update_decision(db: AsyncSession, candidate_id: int, decision: str, reason: str = None, recruiter: str = None):
+async def update_decision(db: AsyncSession, candidate_id, decision: str, reason: str = None, recruiter: str = None):
+    try:
+        cid = int(candidate_id)
+    except (ValueError, TypeError):
+        return None
     result = await db.execute(
-        select(Candidate).where(Candidate.id == candidate_id)
+        select(Candidate).where(Candidate.id == cid)
     )
     candidate = result.scalars().first()
 

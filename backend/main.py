@@ -326,3 +326,105 @@ async def delete_all_candidates(db: AsyncSession = Depends(get_db)):
     await db.execute(sa.text("DELETE FROM candidates"))
     await db.commit()
     return {"status": "ok"}
+
+
+# -------------------------
+# ONE-TIME MIGRATION: copy data into Postgres
+# Safe to remove this block after migration is confirmed working.
+# -------------------------
+
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession as _AsyncSession
+from sqlalchemy.orm import sessionmaker as _sessionmaker
+
+@app.get("/admin/migrate-to-postgres")
+async def migrate_to_postgres(secret: str, db: AsyncSession = Depends(get_db)):
+    settings_result = await db.execute(select(Settings).where(Settings.id == 1))
+    settings_row = settings_result.scalars().first()
+    correct_secret = settings_row.app_password if settings_row else "admin123"
+
+    if secret != correct_secret:
+        raise HTTPException(status_code=401, detail="Invalid secret")
+
+    target_url = os.getenv("MIGRATION_TARGET_URL")
+    if not target_url:
+        raise HTTPException(status_code=400, detail="MIGRATION_TARGET_URL environment variable is not set")
+
+    if target_url.startswith("postgres://"):
+        target_url = target_url.replace("postgres://", "postgresql+asyncpg://", 1)
+
+    target_engine = create_async_engine(target_url)
+    TargetSession = _sessionmaker(bind=target_engine, class_=_AsyncSession, expire_on_commit=False)
+
+    async with target_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    cand_result = await db.execute(select(Candidate))
+    candidates = cand_result.scalars().all()
+
+    settings_result2 = await db.execute(select(Settings))
+    all_settings = settings_result2.scalars().all()
+
+    migrated_candidates = 0
+    migrated_settings = 0
+
+    async with TargetSession() as target_db:
+        for c in candidates:
+            new_c = Candidate(
+                id=c.id,
+                name=getattr(c, "name", None),
+                email=getattr(c, "email", None),
+                phone=getattr(c, "phone", None),
+                location=getattr(c, "location", None),
+                score=getattr(c, "score", None),
+                status=getattr(c, "status", None),
+                resume_text=getattr(c, "resume_text", None),
+                created_at=getattr(c, "created_at", None),
+                abscond_date=getattr(c, "abscond_date", None),
+                resume_url=getattr(c, "resume_url", None),
+                reject_reason=getattr(c, "reject_reason", None),
+                recuiter_name=getattr(c, "recuiter_name", None),
+            )
+            if hasattr(c, "hired_date"):
+                new_c.hired_date = c.hired_date
+            if hasattr(c, "role_applied"):
+                new_c.role_applied = c.role_applied
+            target_db.add(new_c)
+            migrated_candidates += 1
+
+        for s in all_settings:
+            new_s = Settings(
+                id=s.id,
+                company_name=s.company_name,
+                hr_name=s.hr_name,
+                hr_email=s.hr_email,
+                hiring_position=s.hiring_position,
+                min_score=s.min_score,
+                data_retention=s.data_retention,
+                language=s.language,
+                date_format=s.date_format,
+                app_password=s.app_password,
+                delete_password=s.delete_password,
+            )
+            target_db.add(new_s)
+            migrated_settings += 1
+
+        await target_db.commit()
+
+        try:
+            await target_db.execute(sa.text(
+                "SELECT setval(pg_get_serial_sequence('candidates','id'), COALESCE((SELECT MAX(id) FROM candidates), 1))"
+            ))
+            await target_db.execute(sa.text(
+                "SELECT setval(pg_get_serial_sequence('settings','id'), COALESCE((SELECT MAX(id) FROM settings), 1))"
+            ))
+            await target_db.commit()
+        except Exception as e:
+            print(f"Sequence reset skipped: {e}")
+
+    await target_engine.dispose()
+
+    return {
+        "status": "ok",
+        "migrated_candidates": migrated_candidates,
+        "migrated_settings": migrated_settings,
+    }

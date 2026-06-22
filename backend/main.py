@@ -233,12 +233,15 @@ async def get_candidates(db: AsyncSession = Depends(get_db)):
 
 @app.get("/resume-url/{candidate_id}")
 async def get_resume_url(candidate_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Candidate).where(Candidate.id == candidate_id))
+    try:
+        cid = int(candidate_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid candidate ID")
+    result = await db.execute(select(Candidate).where(Candidate.id == cid))
     candidate = result.scalars().first()
     if not candidate or not candidate.resume_url:
         raise HTTPException(status_code=404, detail="Resume not found")
     return {"url": get_pdf_url(candidate.resume_url)}
-
 
 # ── Settings ─────────────────────────────────────────────────────────────
 @app.get("/settings")

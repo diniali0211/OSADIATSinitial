@@ -173,14 +173,6 @@ export function Login({ onLogin }: { onLogin: () => void }) {
           {isLoading ? 'Logging in...' : 'Login'}
         </button>
 
-        {/* Hint */}
-        <p style={{ textAlign: 'center', fontSize: '12px', color: '#9ca3af' }}>
-          Default password: <strong>admin123</strong>
-        </p>
-        <p style={{ textAlign: 'center', fontSize: '12px', color: '#9ca3af', marginTop: '4px' }}>
-          Change it in Settings → Company Profile
-        </p>
-
       </div>
     </div>
   );

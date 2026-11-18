@@ -254,7 +254,6 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         "hr_email": settings.hr_email, "hiring_position": settings.hiring_position,
         "min_score": settings.min_score, "data_retention": settings.data_retention,
         "language": settings.language, "date_format": settings.date_format,
-        "app_password": settings.app_password, "delete_password": settings.delete_password,
     }
 
 @app.post("/settings")
